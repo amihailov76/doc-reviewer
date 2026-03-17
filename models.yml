@@ -1,25 +1,5 @@
 active_model: positive-llm-chat
 models:
-- base_url: https://api.openai.com/v1
-  id: gpt-4o
-  name: GPT-4o
-  provider: openai
-  requires_key: true
-- base_url: https://api.openai.com/v1
-  id: gpt-4o-mini
-  name: GPT-4o mini
-  provider: openai
-  requires_key: true
-- base_url: http://localhost:11434/v1
-  id: local-llama
-  name: Llama 3 (локальная)
-  provider: local
-  requires_key: false
-- base_url: http://localhost:11434/v1
-  id: local-mistral
-  name: Mistral (локальная)
-  provider: local
-  requires_key: false
 - base_url: https://api-llm.ml.ptsecurity.ru/v1
   id: positive-llm-small
   name: Qwen/Qwen3-32B-FP8
