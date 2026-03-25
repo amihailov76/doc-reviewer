@@ -90,23 +90,11 @@ def export_xls(document_id: int, db: Session = Depends(get_db)):
     if not evaluated:
         raise HTTPException(status_code=400, detail="Нет оценённых инструкций")
 
-    all_criteria: list[str] = []
-    for instr in evaluated:
-        for k in (instr.evaluation.criteria_results or {}):
-            if k not in all_criteria:
-                all_criteria.append(k)
-    all_criteria.sort()
-
     COLOR_FILLS = {
         "green":  PatternFill("solid", fgColor="C6EFCE"),
         "yellow": PatternFill("solid", fgColor="FFEB9C"),
         "orange": PatternFill("solid", fgColor="FFCC99"),
         "red":    PatternFill("solid", fgColor="FFC7CE"),
-    }
-    CRITERIA_FILLS = {
-        "ok":      PatternFill("solid", fgColor="C6EFCE"),
-        "warning": PatternFill("solid", fgColor="FFEB9C"),
-        "error":   PatternFill("solid", fgColor="FFC7CE"),
     }
     HEADER_FILL = PatternFill("solid", fgColor="2563EB")
     HEADER_FONT = Font(bold=True, color="FFFFFF")
@@ -115,7 +103,7 @@ def export_xls(document_id: int, db: Session = Depends(get_db)):
     ws = wb.active
     ws.title = "Результаты оценки"
 
-    headers = ["Раздел", "Стр.", "Оценка"] + all_criteria + ["Рекомендации"]
+    headers = ["Раздел", "Стр.", "Оценка", "Рекомендации"]
     for col_idx, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col_idx, value=h)
         cell.fill = HEADER_FILL
@@ -124,7 +112,6 @@ def export_xls(document_id: int, db: Session = Depends(get_db)):
 
     for row_idx, instr in enumerate(evaluated, 2):
         ev = instr.evaluation
-        criteria_results = ev.criteria_results or {}
         recommendations = ev.recommendations or []
 
         rec_text = "\n".join(
@@ -140,23 +127,13 @@ def export_xls(document_id: int, db: Session = Depends(get_db)):
         if ev.color in COLOR_FILLS:
             color_cell.fill = COLOR_FILLS[ev.color]
 
-        for crit_idx, crit_key in enumerate(all_criteria, 4):
-            val = criteria_results.get(crit_key, "")
-            crit_cell = ws.cell(row=row_idx, column=crit_idx, value=val)
-            if val in CRITERIA_FILLS:
-                crit_cell.fill = CRITERIA_FILLS[val]
-
-        rec_cell = ws.cell(row=row_idx, column=4 + len(all_criteria), value=rec_text)
+        rec_cell = ws.cell(row=row_idx, column=4, value=rec_text)
         rec_cell.alignment = Alignment(wrap_text=True)
 
     ws.column_dimensions["A"].width = 40
     ws.column_dimensions["B"].width = 6
     ws.column_dimensions["C"].width = 14
-    for i in range(len(all_criteria)):
-        col_letter = ws.cell(row=1, column=4 + i).column_letter
-        ws.column_dimensions[col_letter].width = 12
-    last_col = ws.cell(row=1, column=4 + len(all_criteria)).column_letter
-    ws.column_dimensions[last_col].width = 60
+    ws.column_dimensions["D"].width = 80
     ws.freeze_panes = "A2"
 
     buf = io.BytesIO()
