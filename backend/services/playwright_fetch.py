@@ -35,8 +35,9 @@ def parse_page(page) -> list:
     Парсит страницу и возвращает список инструкций.
     Каждый элемент: {"title": str, "content": str}
 
-    Для PT Help Portal: каждый <instruction> = отдельная инструкция.
-    Для других сайтов: вся страница = одна инструкция (fallback через markdownify).
+    Для PT Help Portal: весь content-container = одна инструкция.
+    Включает вводный текст, примечания, шаги и завершающий текст.
+    Для других сайтов: fallback через markdownify.
     """
     from bs4 import BeautifulSoup
 
@@ -51,41 +52,86 @@ def parse_page(page) -> list:
     title_el = soup.select_one(".project-page__title, h1")
     page_title = clean_shy(title_el.get_text()).strip() if title_el else page.title() or "Без названия"
 
-    instructions_els = soup.find_all("instruction")
+    # Ищем content-container — основной контейнер страницы PT Help Portal
+    content_container = soup.select_one("content-container")
 
+    if content_container:
+        lines = []
+        step_num = 1
+
+        def process_node(node):
+            nonlocal step_num
+            if isinstance(node, str):
+                text = clean_shy(node.strip())
+                if text:
+                    lines.append(text)
+                return
+
+            tag = node.name if hasattr(node, 'name') else ''
+
+            if tag == 'action':
+                inter = node.find("intermediate-result")
+                inter_text = ""
+                if inter:
+                    inter_text = get_text(inter)
+                    inter.decompose()
+                action_text = get_text(node)
+                if action_text:
+                    lines.append(f"{step_num}. {action_text}")
+                    step_num += 1
+                if inter_text:
+                    lines.append(f"   {inter_text}")
+
+            elif tag == 'task':
+                # Вводная фраза инструкции
+                text = get_text(node)
+                if text:
+                    lines.append(text)
+
+            elif tag in ('p', 'note', 'warning', 'tip', 'important'):
+                text = get_text(node)
+                if text:
+                    lines.append(text)
+
+            elif tag in ('script', 'style', 'nav-bar', 'aside'):
+                return
+
+            else:
+                # Рекурсивно обрабатываем вложенные элементы
+                for child in node.children:
+                    process_node(child)
+
+        for child in content_container.children:
+            process_node(child)
+
+        content = "\n".join(lines).strip()
+        if content:
+            return [{"title": page_title, "content": content}]
+
+    # Fallback: нет content-container — проверяем обычный <instruction>
+    instructions_els = soup.find_all("instruction")
     if instructions_els:
         results = []
         for instr in instructions_els:
-            # Вводная фраза как заголовок инструкции
             task = instr.find("task")
             task_text = get_text(task) if task else ""
-
             lines = []
-            if task_text:
-                lines.append(task_text)
-                lines.append("")
-
-            actions = instr.find_all("action")
-            for i, action in enumerate(actions, 1):
+            step_num = 1
+            for action in instr.find_all("action"):
                 inter = action.find("intermediate-result")
                 inter_text = ""
                 if inter:
                     inter_text = get_text(inter)
                     inter.decompose()
-
                 action_text = get_text(action)
                 if action_text:
-                    lines.append(f"{i}. {action_text}")
+                    lines.append(f"{step_num}. {action_text}")
+                    step_num += 1
                 if inter_text:
                     lines.append(f"   {inter_text}")
-
             content = "\n".join(lines).strip()
             if content:
-                results.append({
-                    "title": task_text or page_title,
-                    "content": content,
-                })
-
+                results.append({"title": task_text or page_title, "content": content})
         return results
 
     else:
