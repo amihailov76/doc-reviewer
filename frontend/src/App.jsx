@@ -5,10 +5,14 @@ import SnapshotsPage from './pages/SnapshotsPage'
 import SettingsPage from './pages/SettingsPage'
 import './App.css'
 
+const buildDate = typeof __BUILD_DATE__ !== 'undefined' && __BUILD_DATE__
+  ? `Обновлено ${__BUILD_DATE__}`
+  : 'dev build'
+
 const NAV_ITEMS = [
-  { to: '/evaluation', label: '🔍 Оценка' },
-  { to: '/snapshots', label: '📸 Снимки' },
   { to: '/settings', label: '⚙️ Настройки' },
+  { to: '/evaluation', label: '🔍 Оценка' },
+  { to: '/snapshots', label: '📸 Сравнение результатов' },
 ]
 
 export default function App() {
@@ -32,12 +36,12 @@ export default function App() {
                 </NavLink>
               ))}
             </nav>
-            <div className="sidebar-footer">MaxPatrol SIEM</div>
+            <div className="sidebar-footer">{buildDate}</div>
           </aside>
 
           <main className="main-content">
             <Routes>
-              <Route path="/" element={<Navigate to="/evaluation" replace />} />
+              <Route path="/" element={<Navigate to="/settings" replace />} />
               <Route path="/evaluation" element={<EvaluationPage />} />
               <Route path="/snapshots" element={<SnapshotsPage />} />
               <Route path="/settings" element={<SettingsPage />} />

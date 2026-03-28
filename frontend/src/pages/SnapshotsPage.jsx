@@ -153,7 +153,11 @@ export default function SnapshotsPage() {
 
   return (
     <div className="page snapshots-page">
-      <h1 className="page-title">Снимки оценки</h1>
+      <h1 className="page-title">Сравнение результатов</h1>
+      <p className="page-subtitle">
+        Сравнивайте результаты проверки документа, чтобы понять, улучшился ли он после обновления.<br />
+        Используйте продуктовые группы, чтобы просматривать и сравнивать результаты для документации разных продуктов.
+      </p>
 
       <div className="snapshots-layout">
 
@@ -226,11 +230,6 @@ export default function SnapshotsPage() {
                   {currentDoc && !hasEvaluations && (
                     <span className="snap-hint">Выполните оценку, чтобы сохранить снимок</span>
                   )}
-                  {currentDoc && hasEvaluations && (
-                    <span className="snap-hint" style={{ color: 'var(--color-text-secondary)' }}>
-                      Отметки ложных срабатываний сохраняются в снимке на момент его создания
-                    </span>
-                  )}
                   {!currentDoc && (
                     <button className="link-btn" onClick={() => navigate('/evaluation')}>
                       Загрузите документ на вкладке Оценка →
@@ -299,23 +298,29 @@ export default function SnapshotsPage() {
                   {snapshots.length >= 1 && (
                     <div className="compare-panel">
                       <div className="compare-panel__selectors">
-                        <select className="doc-type-select compare-panel__select" value={snapA} onChange={e => { setSnapA(e.target.value); setComparison(null) }}>
-                          <option value="">— выберите снимок —</option>
-                          {snapshots.map(s => (
-                            <option key={s.id} value={String(s.id)}>
-                              {s.role === 'baseline' ? '★ ' : ''}{s.name} · {new Date(s.created_at).toLocaleDateString('ru')}
-                            </option>
-                          ))}
-                        </select>
+                        <div className="compare-panel__field">
+                          <label className="compare-panel__label">Снимок A</label>
+                          <select className="doc-type-select" value={snapA} onChange={e => { setSnapA(e.target.value); setComparison(null) }}>
+                            <option value="">— выберите —</option>
+                            {snapshots.map(s => (
+                              <option key={s.id} value={String(s.id)}>
+                                {s.role === 'baseline' ? '★ ' : ''}{s.name} · {new Date(s.created_at).toLocaleDateString('ru')}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                         <span className="compare-panel__arrow">⇄</span>
-                        <select className="doc-type-select compare-panel__select" value={snapB} onChange={e => { setSnapB(e.target.value); setComparison(null) }}>
-                          <option value="current">Текущее состояние</option>
-                          {snapshots.map(s => (
-                            <option key={s.id} value={String(s.id)}>
-                              {s.role === 'baseline' ? '★ ' : ''}{s.name} · {new Date(s.created_at).toLocaleDateString('ru')}
-                            </option>
-                          ))}
-                        </select>
+                        <div className="compare-panel__field">
+                          <label className="compare-panel__label">Снимок B</label>
+                          <select className="doc-type-select" value={snapB} onChange={e => { setSnapB(e.target.value); setComparison(null) }}>
+                            <option value="current">Текущее состояние</option>
+                            {snapshots.map(s => (
+                              <option key={s.id} value={String(s.id)}>
+                                {s.role === 'baseline' ? '★ ' : ''}{s.name} · {new Date(s.created_at).toLocaleDateString('ru')}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                         <button className="btn btn-primary compare-panel__btn" onClick={handleCompare} disabled={loadingCompare || !canCompare || !snapA}>
                           {loadingCompare ? 'Сравнение…' : 'Сравнить'}
                         </button>
@@ -365,26 +370,18 @@ export default function SnapshotsPage() {
                             {comparison.source_b.name}
                           </th>
                           <th>Изменение</th>
-                          <th className="diff-th--center" title="Ложное срабатывание">⚠️</th>
-                          <th className="diff-th--center">Стр.</th>
+                          <th>Стр.</th>
                         </tr>
                       </thead>
                       <tbody>
                         {diffRows.map((row, i) => {
                           const ch = CHANGE_LABEL[row.change]
-                          const isOverridden = row.overrides?.section === true
                           return (
                             <tr key={i} className={`diff-row diff-row--${ch.cls}`}>
-                              <td className="diff-row__title" title={row.title}>
-                                {isOverridden && <span title="Ложное срабатывание" style={{ marginRight: 4 }}>⚠️</span>}
-                                {row.title}
-                              </td>
+                              <td className="diff-row__title" title={row.title}>{row.title}</td>
                               <td className="diff-row__color">{row.color_a ? COLOR_EMOJI[row.color_a] : '—'}</td>
                               <td className="diff-row__color">{row.change !== 'removed' ? COLOR_EMOJI[row.color] : '—'}</td>
                               <td><span className={`change-badge change-badge--${ch.cls}`}>{ch.icon} {ch.label}</span></td>
-                              <td className="diff-row__color">
-                                {isOverridden ? <span title="Помечено как ложное срабатывание">⚠️</span> : ''}
-                              </td>
                               <td className="diff-row__page">{row.page_number || '—'}</td>
                             </tr>
                           )

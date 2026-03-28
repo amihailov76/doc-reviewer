@@ -1,3 +1,8 @@
+import sys
+if sys.platform == "win32":
+    import asyncio
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 import os
 import sys
 from fastapi import FastAPI
@@ -13,6 +18,7 @@ from backend.routers.instructions import router as instructions_router
 from backend.routers.evaluation import router as evaluation_router
 from backend.routers.snapshots import router as snapshots_router
 from backend.routers.groups import router as groups_router
+from backend.routers.web import router as web_router
 
 
 @asynccontextmanager
@@ -36,6 +42,7 @@ app.include_router(instructions_router)
 app.include_router(evaluation_router)
 app.include_router(snapshots_router)
 app.include_router(groups_router)
+app.include_router(web_router)
 
 
 @app.get("/api/ping")

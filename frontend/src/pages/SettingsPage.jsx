@@ -173,7 +173,7 @@ export default function SettingsPage() {
   return (
     <div className="page" style={{ maxWidth: 760 }}>
       <h1 className="page-title">Настройки</h1>
-      <p className="page-subtitle">Конфигурация LLM-моделей и подключения</p>
+      <p className="page-subtitle">Перед началом работы настройте подключение к LLM и выберите критерии оценки документа.</p>
 
       {/* Модели */}
       <div className="card">

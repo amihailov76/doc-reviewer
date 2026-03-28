@@ -42,6 +42,59 @@ export default function EvaluationPage() {
   const [running, setRunning] = useState(false)
   const [evalError, setEvalError] = useState(null)
   const [showFeedback, setShowFeedback] = useState(false)
+  const [uploadTab, setUploadTab] = useState('file') // 'file' | 'url'
+  const [urlInput, setUrlInput] = useState('')
+  const [addUrlInput, setAddUrlInput] = useState('')
+  const [addingUrl, setAddingUrl] = useState(false)
+  const [addUrlError, setAddUrlError] = useState(null)
+  const [showAddUrl, setShowAddUrl] = useState(false)
+  const [addedUrls, setAddedUrls] = useState([]) // список добавленных URL
+
+  async function uploadUrl() {
+    const url = urlInput.trim()
+    if (!url) { setUploadError('Введите ссылку'); return }
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      setUploadError('Ссылка должна начинаться с http:// или https://')
+      return
+    }
+    setUploadError(null); setUploading(true)
+    try {
+      const res = await fetch('/api/documents/from-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setUploadError(data.detail || 'Ошибка при загрузке страницы'); return }
+      setAddedUrls([url])
+      await loadDocument(data.id)
+    } catch { setUploadError('Не удалось связаться с сервером') }
+    finally { setUploading(false) }
+  }
+
+  async function handleAddUrl() {
+    const url = addUrlInput.trim()
+    if (!url) { setAddUrlError('Введите ссылку'); return }
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      setAddUrlError('Ссылка должна начинаться с http:// или https://')
+      return
+    }
+    setAddUrlError(null); setAddingUrl(true)
+    try {
+      const res = await fetch(`/api/documents/${doc.id}/add-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setAddUrlError(data.detail || 'Ошибка при загрузке страницы'); return }
+      setAddedUrls(prev => [...prev, url])
+      setAddUrlInput('')
+      setShowAddUrl(false)
+      await loadDocument(doc.id)
+    } catch { setAddUrlError('Не удалось связаться с сервером') }
+    finally { setAddingUrl(false) }
+  }
 
   // ── Загрузка ──────────────────────────────────────────────────────────────
 
@@ -270,25 +323,74 @@ export default function EvaluationPage() {
         <div className="eval-upload">
           <h1 className="page-title">Оценка инструкций</h1>
           <p className="page-subtitle">Загрузите документ для начала работы</p>
-          <div
-            className={`drop-zone${dragOver ? ' drop-zone--over' : ''}${uploading ? ' drop-zone--loading' : ''}`}
-            onClick={() => !uploading && fileInputRef.current?.click()}
-            onDragOver={e => { e.preventDefault(); setDragOver(true) }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={handleDrop}
-          >
-            <input ref={fileInputRef} type="file" accept=".pdf,.docx,.md,.txt"
-              style={{ display: 'none' }} onChange={handleFileChange} />
-            {uploading ? (
-              <><div className="drop-zone__spinner" /><p className="drop-zone__text">Загрузка и парсинг…</p></>
-            ) : (
-              <>
-                <div className="drop-zone__icon">📄</div>
-                <p className="drop-zone__text">Перетащите файл сюда или <span className="drop-zone__link">выберите на диске</span></p>
-                <p className="drop-zone__hint">{ALLOWED_EXT.join('  ·  ')}</p>
-              </>
-            )}
+
+          {/* Вкладки */}
+          <p className="upload-hint">
+            Загрузите документ или ссылку на веб-страницу с инструкцией. После загрузки первой ссылки вы можете добавить другие — все они будут проверены как один документ.<br />
+            Приложение оптимизировано для парсинга инструкций веб-справки Positive Technologies. Контент других сайтов может отображаться с ошибками.
+          </p>
+
+          {/* Вкладки */}
+          <div className="upload-tabs">
+            <button
+              className={`upload-tab${uploadTab === 'file' ? ' upload-tab--active' : ''}`}
+              onClick={() => { setUploadTab('file'); setUploadError(null) }}
+            >📄 Файл</button>
+            <button
+              className={`upload-tab${uploadTab === 'url' ? ' upload-tab--active' : ''}`}
+              onClick={() => { setUploadTab('url'); setUploadError(null) }}
+            >🔗 По ссылке</button>
           </div>
+
+          {/* Файл */}
+          {uploadTab === 'file' && (
+            <div
+              className={`drop-zone${dragOver ? ' drop-zone--over' : ''}${uploading ? ' drop-zone--loading' : ''}`}
+              onClick={() => !uploading && fileInputRef.current?.click()}
+              onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={handleDrop}
+            >
+              <input ref={fileInputRef} type="file" accept=".pdf,.docx,.md,.txt"
+                style={{ display: 'none' }} onChange={handleFileChange} />
+              {uploading ? (
+                <><div className="drop-zone__spinner" /><p className="drop-zone__text">Загрузка и парсинг…</p></>
+              ) : (
+                <>
+                  <div className="drop-zone__icon">📄</div>
+                  <p className="drop-zone__text">Перетащите файл сюда или <span className="drop-zone__link">выберите на диске</span></p>
+                  <p className="drop-zone__hint">{ALLOWED_EXT.join('  ·  ')}</p>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* По ссылке */}
+          {uploadTab === 'url' && (
+            <div className="url-zone">
+              <input
+                className="url-zone__input snap-name-input"
+                type="url"
+                placeholder="https://help.example.com/..."
+                value={urlInput}
+                onChange={e => setUrlInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && !uploading && uploadUrl()}
+                disabled={uploading}
+                autoFocus
+              />
+              <button
+                className="btn btn-primary"
+                onClick={uploadUrl}
+                disabled={uploading}
+              >
+                {uploading ? <><span className="drop-zone__spinner" style={{ width: 14, height: 14, marginRight: 6 }} />Загрузка…</> : 'Загрузить'}
+              </button>
+              <p className="drop-zone__hint" style={{ marginTop: 8 }}>
+                Страница откроется в браузере на сервере — работает с JS-сайтами
+              </p>
+            </div>
+          )}
+
           {uploadError && <div className="alert alert-error">⚠️ {uploadError}</div>}
         </div>
       )}
@@ -316,6 +418,53 @@ export default function EvaluationPage() {
               <button className="btn btn-secondary btn-sm" onClick={clearDocument}>Загрузить другой</button>
             </div>
           </div>
+
+          {/* Список загруженных URL (только для web-документов) */}
+          {doc.file_type === 'web' && (
+            <div className="card" style={{ padding: '12px 16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: addedUrls.length > 0 ? 8 : 0 }}>
+                <span style={{ fontSize: 13, fontWeight: 600 }}>🔗 Загруженные страницы</span>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => { setShowAddUrl(v => !v); setAddUrlError(null); setAddUrlInput('') }}
+                  disabled={addingUrl}
+                >
+                  {showAddUrl ? 'Отмена' : '+ Добавить страницу'}
+                </button>
+              </div>
+              {addedUrls.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: showAddUrl ? 10 : 0 }}>
+                  {addedUrls.map((u, i) => (
+                    <div key={i} style={{ fontSize: 12, color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ color: 'var(--color-green)' }}>✓</span>
+                      <a href={u} target="_blank" rel="noreferrer" style={{ color: 'var(--color-primary)', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u}</a>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {showAddUrl && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      className="snap-name-input"
+                      type="url"
+                      placeholder="https://help.example.com/..."
+                      value={addUrlInput}
+                      onChange={e => setAddUrlInput(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && !addingUrl && handleAddUrl()}
+                      disabled={addingUrl}
+                      autoFocus
+                      style={{ flex: 1 }}
+                    />
+                    <button className="btn btn-primary" onClick={handleAddUrl} disabled={addingUrl}>
+                      {addingUrl ? 'Загрузка…' : 'Загрузить'}
+                    </button>
+                  </div>
+                  {addUrlError && <div className="alert alert-error" style={{ margin: 0 }}>⚠️ {addUrlError}</div>}
+                </div>
+              )}
+            </div>
+          )}
 
           {!doc.doc_type && (
             <div className="alert alert-warn">⚠️ Укажите тип документа для корректной оценки</div>
@@ -578,5 +727,5 @@ function FeedbackPanel({ section, onReeval, onOverride, running, criteriaLabels 
 }
 
 function fileIcon(type) {
-  return { pdf: '📕', docx: '📘', md: '📝', txt: '📄' }[type] || '📄'
+  return { pdf: '📕', docx: '📘', md: '📝', txt: '📄', web: '🌐' }[type] || '📄'
 }

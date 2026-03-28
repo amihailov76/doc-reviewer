@@ -493,3 +493,61 @@
   border-left: 2px solid var(--color-border);
   padding-left: 8px;
 }
+
+/* ── Upload zone hint ────────────────────────────── */
+.upload-hint {
+  font-size: 12.5px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+}
+
+/* ── Upload tabs ─────────────────────────────────── */
+.upload-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.upload-tab {
+  padding: 7px 18px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.upload-tab:hover {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.upload-tab--active {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+
+/* ── URL zone ────────────────────────────────────── */
+.url-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 28px 24px;
+  border: 2px dashed var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+}
+
+.url-zone__input {
+  font-size: 14px;
+  width: 100%;
+  box-sizing: border-box;
+}

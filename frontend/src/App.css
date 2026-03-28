@@ -91,8 +91,8 @@
 }
 
 .page-subtitle {
-  font-size: 13px;
-  color: var(--color-text-secondary);
+  font-size: 14px;
+  color: var(--color-text);
   margin-top: -14px;
   margin-bottom: 24px;
 }

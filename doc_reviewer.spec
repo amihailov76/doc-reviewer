@@ -63,6 +63,8 @@ hiddenimports += [
     "httpx",
     "openpyxl",
     "yaml",
+    "playwright",
+    "playwright.sync_api",
 ]
 
 # Все модули бэкенда — явно перечисляем чтобы PyInstaller не пропустил
@@ -78,6 +80,7 @@ hiddenimports += [
     "backend.routers.evaluation",
     "backend.routers.snapshots",
     "backend.routers.groups",
+    "backend.routers.web",
     "backend.services",
     "backend.services.evaluator",
     "backend.services.detector",
