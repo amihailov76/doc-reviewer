@@ -3,6 +3,8 @@ import { DocumentProvider } from './context/DocumentContext'
 import EvaluationPage from './pages/EvaluationPage'
 import SnapshotsPage from './pages/SnapshotsPage'
 import SettingsPage from './pages/SettingsPage'
+import ProjectsPage from './pages/ProjectsPage'
+import ProjectPage from './pages/ProjectPage'
 import './App.css'
 
 const buildDate = typeof __BUILD_DATE__ !== 'undefined' && __BUILD_DATE__
@@ -10,9 +12,10 @@ const buildDate = typeof __BUILD_DATE__ !== 'undefined' && __BUILD_DATE__
   : 'dev build'
 
 const NAV_ITEMS = [
-  { to: '/settings', label: '⚙️ Настройки' },
+  { to: '/projects', label: '📁 Проекты' },
   { to: '/evaluation', label: '🔍 Оценка' },
   { to: '/snapshots', label: '📸 Сравнение результатов' },
+  { to: '/settings', label: '⚙️ Настройки' },
 ]
 
 export default function App() {
@@ -41,7 +44,9 @@ export default function App() {
 
           <main className="main-content">
             <Routes>
-              <Route path="/" element={<Navigate to="/settings" replace />} />
+              <Route path="/" element={<Navigate to="/projects" replace />} />
+              <Route path="/projects" element={<ProjectsPage />} />
+              <Route path="/projects/:id" element={<ProjectPage />} />
               <Route path="/evaluation" element={<EvaluationPage />} />
               <Route path="/snapshots" element={<SnapshotsPage />} />
               <Route path="/settings" element={<SettingsPage />} />

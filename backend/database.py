@@ -4,6 +4,9 @@ from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 import os
 import sys
+import logging
+
+log = logging.getLogger(__name__)
 
 # При запуске как .exe (PyInstaller) данные хранятся рядом с исполняемым файлом.
 # При разработке — в папке data/ в корне проекта.
@@ -17,6 +20,19 @@ DB_PATH = os.path.join(BASE_DIR, "data", "db.sqlite")
 engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+
+class Project(Base):
+    """Проект — контейнер для группы документов одного продукта."""
+    __tablename__ = "projects"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    product_context = Column(Text, nullable=True)       # сгенерированный или введённый вручную контекст
+    context_generated_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    documents = relationship("Document", back_populates="project")
 
 
 class Model(Base):
@@ -54,8 +70,10 @@ class Document(Base):
     uploaded_at = Column(DateTime, default=datetime.utcnow)
     last_evaluated_at = Column(DateTime, nullable=True)
     file_path = Column(String, nullable=False)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
 
     instructions = relationship("Instruction", back_populates="document", cascade="all, delete-orphan")
+    project = relationship("Project", back_populates="documents")
 
 
 class Instruction(Base):
@@ -133,6 +151,8 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     _migrate_models_from_yml()
     _migrate_criteria_from_file()
+    _migrate_add_project_column()
+    _migrate_create_default_project()
 
 
 def _migrate_models_from_yml():
@@ -197,6 +217,48 @@ def _migrate_criteria_from_file():
             is_default=True,
         ))
         db.commit()
+    finally:
+        db.close()
+
+
+def _migrate_add_project_column():
+    """Добавляет project_id в таблицу documents, если колонка ещё не существует."""
+    with engine.connect() as conn:
+        columns = [row[1] for row in conn.execute(
+            __import__("sqlalchemy").text("PRAGMA table_info(documents)")
+        )]
+        if "project_id" not in columns:
+            conn.execute(__import__("sqlalchemy").text(
+                "ALTER TABLE documents ADD COLUMN project_id INTEGER REFERENCES projects(id)"
+            ))
+            conn.commit()
+            log.info("Миграция: добавлена колонка project_id в documents")
+
+
+def _migrate_create_default_project():
+    """
+    При первом появлении таблицы projects создаёт проект «По умолчанию»
+    и переносит все существующие документы без проекта в него.
+    """
+    db = SessionLocal()
+    try:
+        if db.query(Project).count() > 0:
+            return  # проекты уже существуют
+
+        # Создаём проект по умолчанию только если есть документы без проекта
+        orphan_docs = db.query(Document).filter(Document.project_id == None).all()
+        if not orphan_docs:
+            return
+
+        default_project = Project(name="По умолчанию")
+        db.add(default_project)
+        db.flush()
+
+        for doc in orphan_docs:
+            doc.project_id = default_project.id
+
+        db.commit()
+        log.info(f"Миграция: создан проект «По умолчанию», перенесено документов: {len(orphan_docs)}")
     finally:
         db.close()
 

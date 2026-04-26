@@ -3,14 +3,6 @@ import { useParams, useNavigate } from 'react-router-dom'
 import DocumentTree from '../components/DocumentTree'
 import '../styles/ResultsPage.css'
 
-const DOC_TYPES = [
-  'Руководство по развёртыванию',
-  'Руководство пользователя',
-  'Руководство администратора',
-  'Справочник по настройке источников',
-  'Справочник по PDQL',
-]
-
 export default function ResultsPage() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -19,8 +11,6 @@ export default function ResultsPage() {
   const [sections, setSections] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [savingType, setSavingType] = useState(false)
-
   useEffect(() => {
     if (!id) { setLoading(false); return }
     fetchStructure(id)
@@ -39,21 +29,6 @@ export default function ResultsPage() {
       setError(e.message)
     } finally {
       setLoading(false)
-    }
-  }
-
-  async function handleDocTypeChange(e) {
-    const newType = e.target.value
-    setSavingType(true)
-    try {
-      await fetch(`/api/documents/${id}/type`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ doc_type: newType }),
-      })
-      setDoc(d => ({ ...d, doc_type: newType }))
-    } finally {
-      setSavingType(false)
     }
   }
 
@@ -136,18 +111,6 @@ export default function ResultsPage() {
           </span>
         </div>
 
-        {/* Выбор типа документа */}
-        <div className="doc-type-row">
-          <label className="doc-type-label">Тип документа:</label>
-          <select className="doc-type-select" value={doc.doc_type || ''}
-            onChange={handleDocTypeChange} disabled={savingType}>
-            <option value="" disabled>— выберите тип —</option>
-            {DOC_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-          </select>
-          {!doc.doc_type && (
-            <span className="doc-type-hint">⚠️ Укажите тип для корректной оценки</span>
-          )}
-        </div>
       </div>
 
       {/* Дерево разделов */}

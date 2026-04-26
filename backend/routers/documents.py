@@ -42,6 +42,7 @@ class SetDocTypeRequest(BaseModel):
 @router.post("/upload")
 def upload_document(
     file: UploadFile = File(...),
+    project_id: int = None,
     db: Session = Depends(get_db),
 ):
     """
@@ -68,19 +69,23 @@ def upload_document(
             "filename": file.filename,
         }
 
-    return _save_and_parse(file, db)
+    return _save_and_parse(file, db, project_id=project_id)
 
 
 @router.post("/upload/replace/{document_id}")
 def replace_document(
     document_id: int,
     file: UploadFile = File(...),
+    project_id: int = None,
     db: Session = Depends(get_db),
 ):
     """Заменяет существующий документ новым файлом (после подтверждения пользователем)."""
     existing = db.query(Document).filter(Document.id == document_id).first()
     if not existing:
         raise HTTPException(status_code=404, detail="Документ не найден")
+
+    # Сохраняем project_id оригинального документа если новый не передан
+    effective_project_id = project_id if project_id is not None else existing.project_id
 
     # Удаляем старый файл с диска
     if os.path.exists(existing.file_path):
@@ -90,10 +95,10 @@ def replace_document(
     db.delete(existing)
     db.commit()
 
-    return _save_and_parse(file, db)
+    return _save_and_parse(file, db, project_id=effective_project_id)
 
 
-def _save_and_parse(file: UploadFile, db: Session) -> dict:
+def _save_and_parse(file: UploadFile, db: Session, project_id: int = None) -> dict:
     """Сохраняет файл на диск, парсит структуру, записывает в БД."""
     _, ext = os.path.splitext(file.filename)
     file_path = os.path.join(UPLOAD_DIR, file.filename)
@@ -114,6 +119,7 @@ def _save_and_parse(file: UploadFile, db: Session) -> dict:
         filename=file.filename,
         file_type=ext.lstrip(".").lower(),
         file_path=file_path,
+        project_id=project_id,
     )
     db.add(doc)
     db.flush()  # получаем doc.id до commit
@@ -229,6 +235,7 @@ def get_structure(document_id: int, db: Session = Depends(get_db)):
             "file_type": doc.file_type,
             "doc_type": doc.doc_type,
             "doc_types": DOC_TYPES,
+            "project_id": doc.project_id,
         },
         "sections": flat,
     }

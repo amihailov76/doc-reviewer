@@ -41,6 +41,45 @@ def _get_heading_level(paragraph) -> int:
     return 0
 
 
+def _para_text_with_bold(para) -> str:
+    """
+    Собирает текст параграфа, оборачивая bold-фрагменты в **...**.
+    Схлопывает соседние фрагменты с одинаковым bold-флагом,
+    чтобы избежать **слово1****слово2** → **слово1слово2**.
+    Добавляет пробел на границе bold/non-bold если Word не включил его в текст рана.
+    Используется только для body-параграфов; заголовки берутся через para.text.
+    """
+    fragments = []
+    for run in para.runs:
+        if not run.text:
+            continue
+        fragments.append((bool(run.bold), run.text))
+
+    merged: list[list] = []
+    for is_bold, text in fragments:
+        if merged and merged[-1][0] == is_bold:
+            prev = merged[-1][1]
+            sep = (" " if (not prev[-1].isspace()
+                           and not text[0].isspace()
+                           and text[0] not in ".,;:!?)")
+                   else "")
+            merged[-1][1] = prev + sep + text
+        else:
+            merged.append([is_bold, text])
+
+    result_parts = []
+    for i, (is_bold, text) in enumerate(merged):
+        if i > 0:
+            prev_text = merged[i - 1][1]
+            if (not prev_text[-1].isspace()
+                    and not text[0].isspace()
+                    and text[0] not in ".,;:!?)"):
+                result_parts.append(" ")
+        result_parts.append(f"**{text}**" if is_bold else text)
+
+    return "".join(result_parts).strip()
+
+
 def parse_docx(file_path: str) -> ParseResult:
     doc = Document(file_path)
     sections: list[Section] = []
@@ -70,12 +109,14 @@ def parse_docx(file_path: str) -> ParseResult:
         level = _get_heading_level(para)
         if level > 0:
             flush(current_title, current_level, current_lines)
+            # Заголовки хранятся как plain text — структурная роль передаётся через поле title
             current_title = text or make_untitled_title("")
             current_level = level
             current_lines = []
         else:
             if text:
-                current_lines.append(text)
+                # Для body-параграфов сохраняем bold-разметку — LLM видит выделение
+                current_lines.append(_para_text_with_bold(para))
 
     # Сохраняем последний раздел
     flush(current_title, current_level, current_lines)

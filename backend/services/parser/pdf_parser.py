@@ -35,17 +35,27 @@ MIN_HEADING_TEXT_LEN = 4
 # - строки с тире/дефисом в начале — пункты маркированного списка
 # - строки, начинающиеся с символа-заменителя □ (U+25A1) — артефакты символьных шрифтов
 #
-# ВАЖНО: паттерн нумерации «^\d+\.\s» намеренно убран из этого списка.
-# Он ошибочно матчил заголовки разделов вида «2. О продукте», «10. Решение проблем».
-# Нумерованные шаги инструкций имеют обычный размер шрифта и не попадают
+# ВАЖНО: простой паттерн нумерации «^\d+\.\s» намеренно убран из этого списка:
+# он ошибочно матчил заголовки разделов вида «2. О продукте», «10. Решение проблем».
+# Нумерованные шаги инструкций в норме имеют обычный размер шрифта и не попадают
 # в эту проверку (она применяется только к блокам с крупным шрифтом, level > 0).
+#
+# Исключение — PDF, где номер шага оформлен жирным или чуть крупнее основного текста
+# (типично для PDF, экспортированных из Word). В таких случаях block_max_size
+# оценивается по самому крупному спану блока, и шаг получает level > 0.
+# Чтобы отличить шаг от заголовка раздела, используем длину блока:
+# заголовки обычно короткие (2–5 слов), шаги — длинные (описание действия + интерфейс).
+# Паттерн «^\d+\.\s.{25,}» матчит нумерованный блок с ≥25 символами после номера:
+# «3. В панели инструментов нажмите...» → матч (шаг, длинный).
+# «3. О продукте» или «10. Решение проблем» → не матч (заголовок, короткий).
 _BODY_TEXT_PATTERNS = re.compile(
     r"^(?:[►▶•]\s*)?[Чч]тобы\s"
     r"|^[Вв]\s+этом\s+разделе"
     r"|^[Сс]м\.?\s+также"
     r"|^[\-\—\–]\s+\S"
     r"|^[\u25A1\u25AA\u25CF\u2022\u25B6]\s*"
-    r"|^[\uE000-\uF8FF]",
+    r"|^[\uE000-\uF8FF]"
+    r"|^\d+\.\s.{25,}",
     re.MULTILINE,
 )
 
@@ -165,28 +175,70 @@ def parse_pdf(file_path: str) -> ParseResult:
             block_is_bold = False
 
             for line in block["lines"]:
-                line_text = ""
+                # Собираем фрагменты (is_real_bold, cleaned_text) для каждого спана.
+                # PUA заменяется на [иконка] здесь — до сборки строки.
+                fragments = []
                 for span in line["spans"]:
-                    line_text += span["text"]
-                    # Учитываем размер спана только если он содержит реальный текст,
-                    # а не только PUA-символы (иконки из символьных шрифтов)
-                    span_clean = _clean_pua(span["text"]).strip()
-                    if span_clean and span["size"] > block_max_size:
+                    raw_text = span["text"]
+                    # Реальный текст без PUA — для определения размера блока.
+                    # ВАЖНО: используем удаление PUA (re.sub без замены), а не _clean_pua() —
+                    # та заменяет PUA на «[иконка]», которая непустая, и иконочный спан
+                    # с нестандартным шрифтом ошибочно поднимал block_max_size.
+                    span_real_text = re.sub(r"[\uE000-\uF8FF]+", "", raw_text).strip()
+                    if span_real_text and span["size"] > block_max_size:
                         block_max_size = span["size"]
                     if _is_bold(span):
                         block_is_bold = True
+                    cleaned = _clean_pua(raw_text)
+                    if not cleaned:
+                        # Если спан занимает видимое пространство, но текст не извлёкся —
+                        # это иконка из нестандартного шрифта (кодовая точка не в PUA-диапазоне,
+                        # но PyMuPDF не может сопоставить глиф с Unicode-символом).
+                        # Определяем по ширине bbox: нулевая ширина — артефакт, ненулевая — иконка.
+                        span_width = span["bbox"][2] - span["bbox"][0]
+                        if span_width > 3:
+                            fragments.append((False, "[иконка]"))
+                        continue
+                    # Bold-обёртку ставим только если спан содержит реальный текст
+                    # (не только иконки): иконочные спаны часто имеют декоративный шрифт
+                    is_real_bold = _is_bold(span) and bool(span_real_text)
+                    fragments.append((is_real_bold, cleaned))
+
+                # Схлопываем соседние фрагменты с одинаковым bold-флагом.
+                # PDF не всегда кодирует пробел между спанами явно — проверяем
+                # нужность пробела и при слиянии, и при переходе между группами.
+                merged: list[list] = []
+                for is_bold_frag, text in fragments:
+                    if merged and merged[-1][0] == is_bold_frag:
+                        prev = merged[-1][1]
+                        sep = (" " if (not prev[-1].isspace()
+                                       and not text[0].isspace()
+                                       and text[0] not in ".,;:!?)")
+                               else "")
+                        merged[-1][1] = prev + sep + text
+                    else:
+                        merged.append([is_bold_frag, text])
+
+                result_parts = []
+                for i, (is_bold_frag, text) in enumerate(merged):
+                    if i > 0:
+                        prev_text = merged[i - 1][1]
+                        if (not prev_text[-1].isspace()
+                                and not text[0].isspace()
+                                and text[0] not in ".,;:!?)"):
+                            result_parts.append(" ")
+                    result_parts.append(f"**{text}**" if is_bold_frag else text)
+
+                line_text = "".join(result_parts)
                 block_text_parts.append(line_text)
 
             block_text = " ".join(block_text_parts).strip()
             if not block_text:
                 continue
 
-            # Заменяем PUA-символы на [иконка] ДО проверки на мусор —
-            # иначе одиночные иконки (например маркеры списков) отбрасываются
-            # и LLM видит пропуск в тексте вместо визуального элемента.
-            block_text = _clean_pua(block_text)
-            if not block_text:
-                continue
+            # PUA уже заменён на [иконка] внутри цикла по спанам.
+            # Проверяем на мусорный блок до проверки уровня заголовка.
+            # Блоки с [иконка] сюда не попадают — они содержат читаемый текст.
 
             # Пропускаем блоки из символьных шрифтов — они не несут текстового смысла.
             # Блоки с [иконка] сюда не попадают — они уже содержат читаемый текст.
@@ -208,7 +260,9 @@ def parse_pdf(file_path: str) -> ParseResult:
 
             if level > 0:
                 flush(current_title, current_level, current_lines, current_page)
-                current_title = block_text
+                # Заголовки разделов хранятся без markdown-обёрток:
+                # структурная роль заголовка уже передаётся через поле title, а не разметку
+                current_title = block_text.replace("**", "")
                 current_level = level
                 current_lines = []
                 current_page = page_num

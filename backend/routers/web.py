@@ -26,6 +26,7 @@ _FETCH_SCRIPT = os.path.join(
 
 class FromUrlRequest(BaseModel):
     url: str
+    project_id: int = None
 
 
 def _run_fetch(url: str) -> dict:
@@ -87,6 +88,7 @@ async def document_from_url(body: FromUrlRequest, db: Session = Depends(get_db))
         filename=url,
         file_type="web",
         file_path="",
+        project_id=body.project_id,
     )
     db.add(doc)
     db.flush()

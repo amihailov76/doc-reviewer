@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import DocumentTree from '../components/DocumentTree'
 import { useDocument } from '../context/DocumentContext'
 import '../styles/DocumentPage.css'
@@ -6,13 +7,6 @@ import '../styles/ResultsPage.css'
 import '../styles/EvaluationPage.css'
 
 const ALLOWED_EXT = ['.pdf', '.docx', '.md', '.txt']
-const DOC_TYPES = [
-  'Руководство по развёртыванию',
-  'Руководство пользователя',
-  'Руководство администратора',
-  'Справочник по настройке источников',
-  'Справочник по PDQL',
-]
 const COLOR_EMOJI = { green: '🟢', yellow: '🟡', orange: '🟠', red: '🔴' }
 const COLOR_LABEL = { green: 'Хорошо', yellow: 'Замечания', orange: 'Проблемы', red: 'Критично' }
 const COLOR_RULE = {
@@ -24,6 +18,7 @@ const COLOR_RULE = {
 
 export default function EvaluationPage() {
   const fileInputRef = useRef(null)
+  const navigate = useNavigate()
   const {
     currentDoc: doc, setCurrentDoc: setDoc,
     sections, setSections,
@@ -35,13 +30,17 @@ export default function EvaluationPage() {
     clearDocument,
   } = useDocument()
 
+  const [projects, setProjects] = useState([])          // все проекты для селектора
+  const [docProject, setDocProject] = useState(null)    // объект текущего проекта
+  const [savingProject, setSavingProject] = useState(false)
+
   const [uploading, setUploading] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [uploadError, setUploadError] = useState(null)
-  const [savingType, setSavingType] = useState(false)
   const [running, setRunning] = useState(false)
   const [evalError, setEvalError] = useState(null)
   const [showFeedback, setShowFeedback] = useState(false)
+  const [showScaleInfo, setShowScaleInfo] = useState(false)
   const [uploadTab, setUploadTab] = useState('file') // 'file' | 'url'
   const [urlInput, setUrlInput] = useState('')
   const [addUrlInput, setAddUrlInput] = useState('')
@@ -149,18 +148,41 @@ export default function EvaluationPage() {
     setSections(data.sections)
     setSelectedSection(null)
     setProgress(null); setSummary(null); setEvalError(null)
+    await _loadProjects(data.document?.project_id)
   }
 
-  async function handleDocTypeChange(e) {
-    const newType = e.target.value
-    setSavingType(true)
-    await fetch(`/api/documents/${doc.id}/type`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ doc_type: newType }),
-    })
-    setDoc(d => ({ ...d, doc_type: newType }))
-    setSavingType(false)
+  async function _loadProjects(currentProjectId) {
+    try {
+      const res = await fetch('/api/projects/')
+      const list = await res.json()
+      setProjects(list)
+      if (currentProjectId) {
+        setDocProject(list.find(p => p.id === currentProjectId) || null)
+      } else {
+        setDocProject(null)
+      }
+    } catch { setProjects([]) }
+  }
+
+  // Подгружаем проекты при открытии документа из ProjectPage (через контекст)
+  useEffect(() => {
+    if (doc) _loadProjects(doc.project_id)
+  }, [doc?.id])
+
+  async function handleProjectChange(e) {
+    const projectId = e.target.value === '' ? null : parseInt(e.target.value)
+    setSavingProject(true)
+    try {
+      await fetch(`/api/projects/documents/${doc.id}/assign`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: projectId }),
+      })
+      setDoc(d => ({ ...d, project_id: projectId }))
+      setDocProject(projectId ? projects.find(p => p.id === projectId) || null : null)
+    } finally {
+      setSavingProject(false)
+    }
   }
 
   async function handleIncludeToggle(instructionId, include) {
@@ -408,13 +430,34 @@ export default function EvaluationPage() {
                 <div className="eval-header__meta">
                   {sections.length} разделов · {doc.file_type.toUpperCase()}
                 </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                  <select
+                    className="doc-type-select"
+                    value={doc.project_id || ''}
+                    onChange={handleProjectChange}
+                    disabled={savingProject}
+                    style={{ fontSize: 12, padding: '3px 8px' }}
+                  >
+                    <option value="">— без проекта —</option>
+                    {projects.map(p => (
+                      <option key={p.id} value={p.id}>📁 {p.name}</option>
+                    ))}
+                  </select>
+                  {docProject ? (
+                    docProject.has_context
+                      ? <span style={{ fontSize: 12, color: 'var(--color-green)' }} title="Контекст продукта задан и будет использован при оценке">✅ контекст задан</span>
+                      : <span
+                          style={{ fontSize: 12, color: '#b45309', cursor: 'pointer' }}
+                          title="Контекст не задан — оценка без учёта специфики продукта. Нажмите, чтобы перейти в проект."
+                          onClick={() => navigate(`/projects/${doc.project_id}`)}
+                        >⚠️ контекст не задан</span>
+                  ) : (
+                    <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>контекст не используется</span>
+                  )}
+                </div>
               </div>
             </div>
             <div className="eval-header__right">
-              <select className="doc-type-select" value={doc.doc_type || ''} onChange={handleDocTypeChange} disabled={savingType}>
-                <option value="" disabled>— тип документа —</option>
-                {DOC_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
               <button className="btn btn-secondary btn-sm" onClick={clearDocument}>Загрузить другой</button>
             </div>
           </div>
@@ -466,9 +509,6 @@ export default function EvaluationPage() {
             </div>
           )}
 
-          {!doc.doc_type && (
-            <div className="alert alert-warn">⚠️ Укажите тип документа для корректной оценки</div>
-          )}
 
           {/* Прогресс-бар и сводка */}
           {progress && (
@@ -500,6 +540,9 @@ export default function EvaluationPage() {
                   </div>
                 )
               })}
+              <button className="scale-info-link" onClick={() => setShowScaleInfo(true)}>
+                Как работает оценка?
+              </button>
               {summary.errors > 0 && <span className="eval-summary__errors">⚠️ {summary.errors} не оценено</span>}
               <button className="btn btn-secondary btn-sm" style={{ marginLeft: 'auto' }} onClick={handleExportXls}>
                 ⬇ Скачать XLS
@@ -626,6 +669,74 @@ export default function EvaluationPage() {
         </div>
       )}
 
+      {showScaleInfo && <ScaleInfoModal onClose={() => setShowScaleInfo(false)} />}
+
+    </div>
+  )
+}
+
+// ── Модал «Как работает оценка» ───────────────────────────────────────────────
+
+function ScaleInfoModal({ onClose }) {
+  return (
+    <div className="scale-modal-overlay" onClick={onClose}>
+      <div className="scale-modal" onClick={e => e.stopPropagation()}>
+        <div className="scale-modal__header">
+          <h3 className="scale-modal__title">Как работает оценка</h3>
+          <button className="scale-modal__close" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="scale-modal__body">
+
+          <section className="scale-modal__section">
+            <h4 className="scale-modal__section-title">Шкала вердиктов</h4>
+            <div className="scale-modal__scale">
+              {[
+                { color: 'green',  emoji: '🟢', label: 'Хорошо',            rule: 'Нет ошибок, не более одного замечания' },
+                { color: 'yellow', emoji: '🟡', label: 'Есть замечания',     rule: 'Не более одной ошибки' },
+                { color: 'orange', emoji: '🟠', label: 'Требует доработки',  rule: '2–3 ошибки' },
+                { color: 'red',    emoji: '🔴', label: 'Критично',           rule: '4 и более ошибок' },
+              ].map(({ color, emoji, label, rule }) => (
+                <div key={color} className={`scale-modal__row scale-modal__row--${color}`}>
+                  <span className="scale-modal__emoji">{emoji}</span>
+                  <span className="scale-modal__color-label">{label}</span>
+                  <span className="scale-modal__rule">{rule}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="scale-modal__section">
+            <h4 className="scale-modal__section-title">Результаты по критериям</h4>
+            <div className="scale-modal__badges">
+              <div className="scale-modal__badge-row">
+                <span className="criteria-badge criteria-badge--ok">ok</span>
+                <span className="scale-modal__badge-desc">Критерий полностью выполнен</span>
+              </div>
+              <div className="scale-modal__badge-row">
+                <span className="criteria-badge criteria-badge--warning">warning</span>
+                <span className="scale-modal__badge-desc">Критерий выполнен частично — элемент есть, но неполный или неточный</span>
+              </div>
+              <div className="scale-modal__badge-row">
+                <span className="criteria-badge criteria-badge--error">error</span>
+                <span className="scale-modal__badge-desc">Критерий не выполнен — элемент отсутствует или существенно нарушен</span>
+              </div>
+            </div>
+          </section>
+
+          <section className="scale-modal__section">
+            <h4 className="scale-modal__section-title">Источник критериев</h4>
+            <p className="scale-modal__text">
+              Критерии оценки основаны на стандартах написания технической документации
+              для ИБ-продуктов: структура инструкции, формулировка шагов, наличие
+              предварительных условий, описание результата. Активный набор критериев
+              можно посмотреть и изменить в разделе{' '}
+              <strong>Настройки → Критерии</strong>.
+            </p>
+          </section>
+
+        </div>
+      </div>
     </div>
   )
 }

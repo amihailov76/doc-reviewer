@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from backend.database import get_db, Document, Instruction, Evaluation
+from backend.database import get_db, Document, Instruction, Evaluation, Project
 from backend.services.evaluator import evaluate_instruction, EvaluationError
 
 router = APIRouter(prefix="/api/evaluation", tags=["evaluation"])
@@ -34,7 +34,8 @@ def _sse_heartbeat() -> str:
 
 # Оценка одной инструкции с heartbeat
 
-def _call_llm_with_heartbeat(instr, doc_type, q: queue.Queue):
+def _call_llm_with_heartbeat(instr, q: queue.Queue,
+                              product_context=None, neighbor_titles=None):
     result_holder = [None]
     error_holder = [None]
     done_event = threading.Event()
@@ -44,7 +45,9 @@ def _call_llm_with_heartbeat(instr, doc_type, q: queue.Queue):
             result_holder[0] = evaluate_instruction(
                 title=instr.title,
                 content=instr.content or "",
-                doc_type=doc_type,
+                product_context=product_context,
+                section_path=instr.section_path,
+                neighbor_titles=neighbor_titles,
             )
         except EvaluationError as e:
             error_holder[0] = e
@@ -96,6 +99,34 @@ def evaluate_document(document_id: int, resume: bool = False, db: Session = Depe
     if not instructions:
         raise HTTPException(status_code=400, detail="Нет инструкций для оценки.")
 
+    # Контекст продукта из проекта (если документ привязан к проекту)
+    product_context = None
+    if doc.project_id:
+        project = db.query(Project).filter(Project.id == doc.project_id).first()
+        if project and project.product_context:
+            product_context = project.product_context
+
+    # Карта всех разделов документа для поиска соседей
+    all_doc_instrs = (
+        db.query(Instruction)
+        .filter(Instruction.document_id == document_id)
+        .order_by(Instruction.id)
+        .all()
+    )
+    all_ids = [i.id for i in all_doc_instrs]
+    id_to_title = {i.id: i.title for i in all_doc_instrs}
+
+    def _get_neighbor_titles(instr_id: int) -> list:
+        """Возвращает заголовки 2 разделов до и 2 после текущего."""
+        if instr_id not in all_ids:
+            return []
+        idx = all_ids.index(instr_id)
+        neighbors = []
+        for j in [idx - 2, idx - 1, idx + 1, idx + 2]:
+            if 0 <= j < len(all_ids):
+                neighbors.append(id_to_title[all_ids[j]])
+        return neighbors
+
     def stream():
         yield _sse_event({"type": "start", "total": len(instructions)})
         summary = {"green": 0, "yellow": 0, "orange": 0, "red": 0, "errors": 0}
@@ -116,8 +147,14 @@ def evaluate_document(document_id: int, resume: bool = False, db: Session = Depe
                     })
                     continue
 
+            neighbor_titles = _get_neighbor_titles(instr.id)
             q = queue.Queue()
-            t = threading.Thread(target=_call_llm_with_heartbeat, args=(instr, doc.doc_type, q), daemon=True)
+            t = threading.Thread(
+                target=_call_llm_with_heartbeat,
+                args=(instr, q),
+                kwargs={"product_context": product_context, "neighbor_titles": neighbor_titles},
+                daemon=True,
+            )
             t.start()
 
             result = None
@@ -208,10 +245,35 @@ def evaluate_single(instruction_id: int, db: Session = Depends(get_db)):
 
     doc = db.query(Document).filter(Document.id == instr.document_id).first()
 
+    # Контекст продукта из проекта
+    product_context = None
+    if doc and doc.project_id:
+        project = db.query(Project).filter(Project.id == doc.project_id).first()
+        if project and project.product_context:
+            product_context = project.product_context
+
+    # Соседние разделы
+    all_doc_instrs = (
+        db.query(Instruction)
+        .filter(Instruction.document_id == instr.document_id)
+        .order_by(Instruction.id)
+        .all()
+    )
+    all_ids = [i.id for i in all_doc_instrs]
+    id_to_title = {i.id: i.title for i in all_doc_instrs}
+    neighbor_titles = []
+    if instr.id in all_ids:
+        idx = all_ids.index(instr.id)
+        for j in [idx - 2, idx - 1, idx + 1, idx + 2]:
+            if 0 <= j < len(all_ids):
+                neighbor_titles.append(id_to_title[all_ids[j]])
+
     try:
         result = evaluate_instruction(
             title=instr.title, content=instr.content or "",
-            doc_type=doc.doc_type if doc else None,
+            product_context=product_context,
+            section_path=instr.section_path,
+            neighbor_titles=neighbor_titles,
         )
     except EvaluationError as e:
         raise HTTPException(status_code=502, detail={"message": e.message, "advice": e.advice})

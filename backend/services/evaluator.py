@@ -118,7 +118,16 @@ def _load_criteria() -> str:
 
 # ── Промпт ────────────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """Ты — эксперт по оценке качества технической документации.
+# Часть системного промпта с инструкциями по формату ответа.
+# Роль подставляется динамически из секции ## Роль активного набора критериев.
+# Если секция ## Роль отсутствует — используется SYSTEM_PROMPT с дефолтной ролью.
+_SYSTEM_PROMPT_TASK = """Перед оценкой по критериям мысленно ответь на три вопроса:
+1. Понятна ли инструкция пользователю без дополнительного контекста из других разделов?
+2. Какие предварительные условия или термины подразумеваются, но не объяснены?
+3. Есть ли в тексте ссылки на объекты, настройки или процедуры, которые нигде в инструкции не раскрыты?
+
+Используй ответы как основу при оценке критериев 1.1, 1.2, 1.3 и при формулировке рекомендаций.
+
 Твоя задача — проверить инструкцию на соответствие заданным критериям и вернуть результат строго в формате JSON.
 
 Для каждого критерия укажи одно из трёх значений:
@@ -128,7 +137,11 @@ SYSTEM_PROMPT = """Ты — эксперт по оценке качества т
 
 Если для критерия есть замечания (warning или error), добавь рекомендацию в список recommendations.
 
-Важно: текст инструкции извлечён из PDF автоматически. Иконки интерфейса могут быть обозначены меткой [иконка] или отсутствовать совсем (например «Нажмите .» или «нажатию в меню» — это нормально для PDF-документации). Не считай отсутствие или метку [иконка] ошибкой при оценке критерия 2.1 (описание интерфейса) — оценивай только наличие названий кнопок, полей и пунктов меню в тексте.
+Важно: некоторые критерии помечены как <опциональные>. Для таких критериев:
+- Если соответствующий раздел или элемент в инструкции отсутствует — ставь "ok".
+- Оценивай содержание только если раздел реально присутствует в тексте.
+
+Важно: текст инструкции извлечён из PDF автоматически. Символы иконочных шрифтов (графические значки кнопок) не извлекаются как текст и заменяются меткой [иконка]. Эта метка обозначает декоративный графический символ — не название элемента интерфейса. Названия кнопок, полей и пунктов меню всегда присутствуют в тексте отдельно, рядом с меткой или без неё. Например: «Нажмите [иконка] Сохранить» — здесь «Сохранить» и есть название кнопки. Никогда не считай метку [иконка] отсутствующим или нераскрытым названием элемента интерфейса.
 
 Формат ответа — строго JSON, без markdown-блоков, без пояснений:
 {
@@ -146,12 +159,65 @@ SYSTEM_PROMPT = """Ты — эксперт по оценке качества т
   ]
 }"""
 
+# Фоллбэк-промпт с дефолтной ролью — используется если в критериях нет секции ## Роль
+SYSTEM_PROMPT = "Ты — эксперт по оценке качества технической документации.\n" + _SYSTEM_PROMPT_TASK
 
-def _build_user_prompt(title: str, content: str, doc_type: Optional[str], criteria: str) -> str:
-    doc_type_line = f"Тип документа: {doc_type}" if doc_type else "Тип документа: не указан"
+
+def _extract_role(criteria_content: str) -> Optional[str]:
+    """
+    Извлекает текст секции ## Роль из набора критериев.
+    Возвращает текст секции без заголовка или None если секция отсутствует.
+    """
+    match = re.search(
+        r"^##\s+Роль\s*\n(.*?)(?=\n##\s|\Z)",
+        criteria_content,
+        re.MULTILINE | re.DOTALL,
+    )
+    if match:
+        return match.group(1).strip()
+    return None
+
+
+def _strip_role_section(criteria_content: str) -> str:
+    """
+    Удаляет секцию ## Роль и разделитель после неё из набора критериев.
+    Используется чтобы не дублировать роль в пользовательском промпте.
+    """
+    # Убираем блок ## Роль вместе с возможным горизонтальным разделителем (---)
+    cleaned = re.sub(
+        r"^##\s+Роль\s*\n.*?(?=\n##\s|\Z)",
+        "",
+        criteria_content,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    # Убираем висячие разделители --- которые могли остаться после блока
+    cleaned = re.sub(r"\n---\s*\n", "\n", cleaned)
+    return cleaned.strip()
+
+
+def _build_user_prompt(
+    title: str,
+    content: str,
+    criteria: str,
+    product_context: Optional[str] = None,
+    section_path: Optional[str] = None,
+    neighbor_titles: Optional[list] = None,
+) -> str:
+    # Блок контекста продукта — подставляется только если задан
+    context_block = ""
+    if product_context:
+        context_block = f"\n--- КОНТЕКСТ ПРОДУКТА ---\n{product_context}\n--- КОНЕЦ КОНТЕКСТА ---\n"
+
+    # Структурный контекст — путь раздела и соседи
+    structural_lines = []
+    if section_path:
+        structural_lines.append(f"Путь в документе: {section_path}")
+    if neighbor_titles:
+        structural_lines.append(f"Соседние разделы: {' | '.join(neighbor_titles)}")
+    structural_block = ("\n" + "\n".join(structural_lines)) if structural_lines else ""
+
     return f"""Оцени следующую инструкцию по критериям ниже.
-
-{doc_type_line}
+{context_block}{structural_block}
 
 --- ИНСТРУКЦИЯ ---
 Заголовок: {title}
@@ -204,7 +270,9 @@ def _build_headers(provider: str, api_key: Optional[str]) -> dict:
 def evaluate_instruction(
     title: str,
     content: str,
-    doc_type: Optional[str] = None,
+    product_context: Optional[str] = None,
+    section_path: Optional[str] = None,
+    neighbor_titles: Optional[list] = None,
 ) -> EvaluationResult:
     """
     Оценивает одну инструкцию через LLM.
@@ -228,7 +296,21 @@ def evaluate_instruction(
             ),
         )
 
-    user_prompt = _build_user_prompt(title, content, doc_type, criteria)
+    # Извлекаем роль из секции ## Роль и строим системный промпт динамически.
+    # Если секции нет — используем фоллбэк с дефолтной ролью.
+    role_text = _extract_role(criteria)
+    active_system_prompt = (
+        role_text + "\n\n" + _SYSTEM_PROMPT_TASK if role_text else SYSTEM_PROMPT
+    )
+    # Убираем секцию ## Роль из критериев — в пользовательский промпт она не идёт
+    criteria_for_prompt = _strip_role_section(criteria)
+
+    user_prompt = _build_user_prompt(
+        title, content, criteria_for_prompt,
+        product_context=product_context,
+        section_path=section_path,
+        neighbor_titles=neighbor_titles,
+    )
     headers = _build_headers(provider, api_key)
 
     # Anthropic и OpenAI используют разные форматы payload
@@ -236,14 +318,14 @@ def evaluate_instruction(
         payload = {
             "model": model_id,
             "max_tokens": 1500,
-            "system": SYSTEM_PROMPT,
+            "system": active_system_prompt,
             "messages": [{"role": "user", "content": user_prompt}],
         }
     else:
         payload = {
             "model": model_id,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": active_system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0.1,

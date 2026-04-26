@@ -551,3 +551,108 @@
   width: 100%;
   box-sizing: border-box;
 }
+
+/* ── Ссылка «Как работает оценка» ───────────────── */
+.scale-info-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+.scale-info-link:hover {
+  color: var(--color-primary);
+}
+
+/* ── Модал «Как работает оценка» ────────────────── */
+.scale-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scale-modal {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  width: 480px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+}
+
+.scale-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--color-border);
+}
+.scale-modal__title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-text);
+  margin: 0;
+}
+.scale-modal__close {
+  background: none;
+  border: none;
+  font-size: 16px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.scale-modal__close:hover { color: var(--color-text); }
+
+.scale-modal__body { padding: 18px 20px; display: flex; flex-direction: column; gap: 20px; }
+
+.scale-modal__section-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-secondary);
+  margin: 0 0 10px;
+}
+
+/* Строки шкалы */
+.scale-modal__scale { display: flex; flex-direction: column; gap: 6px; }
+.scale-modal__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.scale-modal__row--green  { background: #dcfce7; }
+.scale-modal__row--yellow { background: #fef9c3; }
+.scale-modal__row--orange { background: #ffedd5; }
+.scale-modal__row--red    { background: #fee2e2; }
+
+.scale-modal__emoji { font-size: 16px; flex-shrink: 0; }
+.scale-modal__color-label { font-weight: 600; width: 140px; flex-shrink: 0; }
+.scale-modal__rule { color: var(--color-text-secondary); }
+
+/* Строки бейджей */
+.scale-modal__badges { display: flex; flex-direction: column; gap: 8px; }
+.scale-modal__badge-row { display: flex; align-items: center; gap: 10px; }
+.scale-modal__badge-desc { font-size: 13px; color: var(--color-text); }
+
+/* Текст источника */
+.scale-modal__text {
+  font-size: 13px;
+  color: var(--color-text);
+  line-height: 1.6;
+  margin: 0;
+}

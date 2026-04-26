@@ -19,6 +19,7 @@ from backend.routers.evaluation import router as evaluation_router
 from backend.routers.snapshots import router as snapshots_router
 from backend.routers.groups import router as groups_router
 from backend.routers.web import router as web_router
+from backend.routers.projects import router as projects_router
 
 
 @asynccontextmanager
@@ -43,6 +44,7 @@ app.include_router(evaluation_router)
 app.include_router(snapshots_router)
 app.include_router(groups_router)
 app.include_router(web_router)
+app.include_router(projects_router)
 
 
 @app.get("/api/ping")
