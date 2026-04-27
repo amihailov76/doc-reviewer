@@ -19,6 +19,7 @@ from typing import Optional
 import httpx
 
 from backend.config import get_active_model
+from backend.services.glossary import glossary_to_prompt_block
 
 # ── Путь к файлу критериев ────────────────────────────────────────────────────
 import sys as _sys
@@ -202,11 +203,27 @@ def _build_user_prompt(
     product_context: Optional[str] = None,
     section_path: Optional[str] = None,
     neighbor_titles: Optional[list] = None,
+    glossary: Optional[list] = None,
+    diff_hint: Optional[str] = None,
 ) -> str:
     # Блок контекста продукта — подставляется только если задан
     context_block = ""
     if product_context:
         context_block = f"\n--- КОНТЕКСТ ПРОДУКТА ---\n{product_context}\n--- КОНЕЦ КОНТЕКСТА ---\n"
+
+    # Блок терминов продукта из глоссария
+    glossary_block = glossary_to_prompt_block(glossary)
+
+    # Блок изменений при обновлении документа
+    diff_block = ""
+    if diff_hint:
+        diff_block = (
+            f"\n--- ИЗМЕНЕНИЯ В РАЗДЕЛЕ ---\n"
+            f"Раздел обновлён по сравнению с предыдущей версией документа. "
+            f"Изменения: {diff_hint}\n"
+            f"Оценивай актуальный текст раздела, а не предыдущую версию.\n"
+            f"--- КОНЕЦ ИЗМЕНЕНИЙ ---\n"
+        )
 
     # Структурный контекст — путь раздела и соседи
     structural_lines = []
@@ -217,7 +234,7 @@ def _build_user_prompt(
     structural_block = ("\n" + "\n".join(structural_lines)) if structural_lines else ""
 
     return f"""Оцени следующую инструкцию по критериям ниже.
-{context_block}{structural_block}
+{context_block}{glossary_block}{diff_block}{structural_block}
 
 --- ИНСТРУКЦИЯ ---
 Заголовок: {title}
@@ -273,6 +290,8 @@ def evaluate_instruction(
     product_context: Optional[str] = None,
     section_path: Optional[str] = None,
     neighbor_titles: Optional[list] = None,
+    glossary: Optional[list] = None,
+    diff_hint: Optional[str] = None,
 ) -> EvaluationResult:
     """
     Оценивает одну инструкцию через LLM.
@@ -310,6 +329,8 @@ def evaluate_instruction(
         product_context=product_context,
         section_path=section_path,
         neighbor_titles=neighbor_titles,
+        glossary=glossary,
+        diff_hint=diff_hint,
     )
     headers = _build_headers(provider, api_key)
 

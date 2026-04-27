@@ -14,9 +14,11 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from backend.database import get_db, Document, Instruction
+from backend.database import get_db, Document, Instruction, Evaluation
 from backend.services.parser import parse_document
 from backend.services.detector import classify_section
+from backend.services.glossary import extract_glossary
+from backend.services.differ import match_sections
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -79,23 +81,87 @@ def replace_document(
     project_id: int = None,
     db: Session = Depends(get_db),
 ):
-    """Заменяет существующий документ новым файлом (после подтверждения пользователем)."""
+    """
+    Заменяет существующий документ новым файлом (после подтверждения пользователем).
+    Сохраняет оценки неизменившихся разделов через difflib-сравнение.
+    """
     existing = db.query(Document).filter(Document.id == document_id).first()
     if not existing:
         raise HTTPException(status_code=404, detail="Документ не найден")
 
-    # Сохраняем project_id оригинального документа если новый не передан
     effective_project_id = project_id if project_id is not None else existing.project_id
+
+    # Снимаем снимок старых инструкций с оценками до удаления документа
+    old_instructions = (
+        db.query(Instruction)
+        .filter(Instruction.document_id == document_id)
+        .all()
+    )
 
     # Удаляем старый файл с диска
     if os.path.exists(existing.file_path):
         os.remove(existing.file_path)
 
-    # Удаляем старый документ из БД (каскадно удалятся instructions и evaluations)
+    # Удаляем старый документ (каскадно удалятся instructions и evaluations)
     db.delete(existing)
     db.commit()
 
-    return _save_and_parse(file, db, project_id=effective_project_id)
+    # Парсим новый файл и записываем в БД
+    result = _save_and_parse(file, db, project_id=effective_project_id)
+
+    # Применяем diff-сопоставление: переносим оценки и проставляем подсказки
+    if old_instructions and not result.get("conflict"):
+        _apply_diff_matches(result["id"], old_instructions, db)
+        result["diff_applied"] = True
+
+    return result
+
+
+def _apply_diff_matches(new_doc_id: int, old_instructions: list, db) -> None:
+    """
+    Сопоставляет разделы новой версии документа со старыми.
+    - Для неизменившихся разделов копирует оценку (без LLM-вызова).
+    - Для частично изменившихся записывает diff_hint в Instruction.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+
+    new_instructions = (
+        db.query(Instruction)
+        .filter(Instruction.document_id == new_doc_id)
+        .order_by(Instruction.id)
+        .all()
+    )
+
+    matches = match_sections(old_instructions, new_instructions)
+
+    copied = 0
+    hinted = 0
+
+    for match, new_instr in zip(matches, new_instructions):
+        if match.action == "copy" and match.old_evaluation:
+            ev = match.old_evaluation
+            evaluation = Evaluation(
+                instruction_id=new_instr.id,
+                color=ev["color"],
+                criteria_results=ev["criteria_results"],
+                recommendations=ev["recommendations"],
+                model_used=ev["model_used"],
+                overrides=ev["overrides"],
+            )
+            db.add(evaluation)
+            copied += 1
+
+        elif match.action == "hint" and match.diff_hint:
+            new_instr.diff_hint = match.diff_hint
+            hinted += 1
+
+    db.commit()
+    log.info(
+        f"Diff-сопоставление doc_id={new_doc_id}: "
+        f"скопировано оценок={copied}, подсказок={hinted}, "
+        f"новых разделов={sum(1 for m in matches if m.action == 'fresh')}"
+    )
 
 
 def _save_and_parse(file: UploadFile, db: Session, project_id: int = None) -> dict:
@@ -136,6 +202,14 @@ def _save_and_parse(file: UploadFile, db: Session, project_id: int = None) -> di
             section_path=_build_section_path(result.sections, i),
         )
         db.add(instruction)
+
+    # Извлекаем глоссарий продукта из всех разделов через YAKE
+    try:
+        doc.glossary = extract_glossary(result.sections)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Не удалось извлечь глоссарий: {e}")
+        doc.glossary = []
 
     db.commit()
     db.refresh(doc)

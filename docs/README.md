@@ -354,6 +354,85 @@ ALTER TABLE documents ADD COLUMN project_id INTEGER REFERENCES projects(id);
 
 ---
 
+## Этап 12: Глоссарий продукта (YAKE) и умная переоценка при замене документа (difflib) (2026-04-24)
+
+### Что изменилось
+
+#### Глоссарий продукта — YAKE
+
+**`backend/services/glossary.py`** (новый)
+
+При каждой загрузке документа автоматически извлекается список устоявшихся терминов продукта. Используется YAKE (статистический экстрактор ключевых фраз) поверх текста всех разделов; при наличии pymorphy3 текст предварительно лемматизируется для корректной дедупликации форм. Результат фильтруется: убираются глагольные формы, стоп-слова, цифровые строки, дубли. Итог — не более 30 терминов сохраняется в `Document.glossary` (JSON).
+
+Глоссарий подставляется в каждый LLM-запрос блоком «ТЕРМИНЫ ПРОДУКТА» и сообщает модели, какие термины являются устоявшимися для данного продукта и не требуют расшифровки в каждом разделе. Снижает количество ложных срабатываний по критериям 1.1 (цель и контекст) и 1.2 (предварительные условия).
+
+**`backend/routers/documents.py`**
+
+После парсинга разделов вызывается `extract_glossary(result.sections)`, результат записывается в `doc.glossary`. Ошибка при извлечении глоссария не прерывает загрузку документа — записывается пустой список.
+
+**`backend/services/evaluator.py`**
+
+Функция `evaluate_instruction()` и `_build_user_prompt()` принимают параметр `glossary: list[str] = None`. Вспомогательная функция `glossary_to_prompt_block()` формирует текстовый блок для промпта.
+
+**`backend/routers/evaluation.py`**
+
+`doc.glossary` загружается из БД и передаётся в `_call_llm_with_heartbeat()` и `evaluate_single()`.
+
+#### Умная переоценка при замене документа — difflib
+
+**`backend/services/differ.py`** (новый)
+
+Сервис сопоставления версий документа. Функция `match_sections(old, new)` для каждого раздела новой версии ищет пару в старой — сначала по точному совпадению заголовка, затем по `SequenceMatcher` с порогом 0.70. Для найденных пар вычисляется схожесть содержимого:
+
+| Ratio | Действие |
+|---|---|
+| ≥ 0.95 | `copy` — раздел не изменился, оценка переносится без LLM-вызова |
+| 0.60–0.95 | `hint` — раздел изменился частично, генерируется `diff_hint` |
+| < 0.60 или нет пары | `fresh` — оценивается с нуля |
+
+`diff_hint` — краткое описание изменений: количество добавленных/удалённых строк и примеры изменённых фрагментов (до 2 штук из `unified_diff`).
+
+**`backend/routers/documents.py`**
+
+`replace_document()` переработан: до удаления старого документа снимает снимок его инструкций вместе с оценками. После парсинга новой версии вызывает `_apply_diff_matches()`: для разделов с `action=copy` создаёт `Evaluation` напрямую в БД (без LLM), для `action=hint` записывает `diff_hint` в поле `Instruction.diff_hint`.
+
+**`backend/services/evaluator.py`**
+
+Параметр `diff_hint: str = None` в `evaluate_instruction()` и `_build_user_prompt()`. Если задан — добавляется блок «ИЗМЕНЕНИЯ В РАЗДЕЛЕ» с описанием что изменилось и указанием оценивать актуальный текст.
+
+**`backend/routers/evaluation.py`**
+
+`instr.diff_hint` передаётся в оба вызова `evaluate_instruction()`.
+
+### Новые поля в БД
+
+```sql
+ALTER TABLE documents    ADD COLUMN glossary   JSON;
+ALTER TABLE instructions ADD COLUMN diff_hint  TEXT;
+```
+
+Обе колонки добавляются автоматически при старте через `_migrate_add_glossary_column()` и `_migrate_add_diff_hint_column()`.
+
+### Новые зависимости
+
+```
+yake==0.4.8
+```
+
+### Затронутые файлы
+
+| Файл | Характер изменений |
+|---|---|
+| `requirements.txt` | +yake |
+| `backend/services/glossary.py` | новый |
+| `backend/services/differ.py` | новый |
+| `backend/database.py` | +glossary в Document, +diff_hint в Instruction, миграции |
+| `backend/services/evaluator.py` | +glossary и diff_hint в промпт |
+| `backend/routers/documents.py` | +extract_glossary, переработан replace_document |
+| `backend/routers/evaluation.py` | +glossary и diff_hint в вызовы evaluate_instruction |
+
+---
+
 ## Известные ограничения
 
 - **Python 3.11** — PyMuPDF несовместим с Python 3.12+

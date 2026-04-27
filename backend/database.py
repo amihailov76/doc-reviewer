@@ -71,6 +71,7 @@ class Document(Base):
     last_evaluated_at = Column(DateTime, nullable=True)
     file_path = Column(String, nullable=False)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
+    glossary = Column(JSON, nullable=True)          # список терминов продукта, извлечённых YAKE
 
     instructions = relationship("Instruction", back_populates="document", cascade="all, delete-orphan")
     project = relationship("Project", back_populates="documents")
@@ -88,6 +89,7 @@ class Instruction(Base):
     level = Column(Integer, nullable=True)
     section_path = Column(String, nullable=True)
     include_in_evaluation = Column(Integer, default=1)
+    diff_hint = Column(Text, nullable=True)         # краткое описание изменений при замене документа
 
     document = relationship("Document", back_populates="instructions")
     evaluation = relationship("Evaluation", back_populates="instruction", uselist=False, cascade="all, delete-orphan")
@@ -153,6 +155,8 @@ def init_db():
     _migrate_criteria_from_file()
     _migrate_add_project_column()
     _migrate_create_default_project()
+    _migrate_add_glossary_column()
+    _migrate_add_diff_hint_column()
 
 
 def _migrate_models_from_yml():
@@ -261,6 +265,34 @@ def _migrate_create_default_project():
         log.info(f"Миграция: создан проект «По умолчанию», перенесено документов: {len(orphan_docs)}")
     finally:
         db.close()
+
+
+def _migrate_add_glossary_column():
+    """Добавляет колонку glossary в таблицу documents, если её ещё нет."""
+    with engine.connect() as conn:
+        columns = [row[1] for row in conn.execute(
+            __import__("sqlalchemy").text("PRAGMA table_info(documents)")
+        )]
+        if "glossary" not in columns:
+            conn.execute(__import__("sqlalchemy").text(
+                "ALTER TABLE documents ADD COLUMN glossary JSON"
+            ))
+            conn.commit()
+            log.info("Миграция: добавлена колонка glossary в documents")
+
+
+def _migrate_add_diff_hint_column():
+    """Добавляет колонку diff_hint в таблицу instructions, если её ещё нет."""
+    with engine.connect() as conn:
+        columns = [row[1] for row in conn.execute(
+            __import__("sqlalchemy").text("PRAGMA table_info(instructions)")
+        )]
+        if "diff_hint" not in columns:
+            conn.execute(__import__("sqlalchemy").text(
+                "ALTER TABLE instructions ADD COLUMN diff_hint TEXT"
+            ))
+            conn.commit()
+            log.info("Миграция: добавлена колонка diff_hint в instructions")
 
 
 def get_active_criteria_content() -> str:

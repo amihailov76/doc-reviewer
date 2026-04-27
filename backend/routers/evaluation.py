@@ -35,7 +35,8 @@ def _sse_heartbeat() -> str:
 # Оценка одной инструкции с heartbeat
 
 def _call_llm_with_heartbeat(instr, q: queue.Queue,
-                              product_context=None, neighbor_titles=None):
+                              product_context=None, neighbor_titles=None,
+                              glossary=None):
     result_holder = [None]
     error_holder = [None]
     done_event = threading.Event()
@@ -48,6 +49,8 @@ def _call_llm_with_heartbeat(instr, q: queue.Queue,
                 product_context=product_context,
                 section_path=instr.section_path,
                 neighbor_titles=neighbor_titles,
+                glossary=glossary,
+                diff_hint=instr.diff_hint,
             )
         except EvaluationError as e:
             error_holder[0] = e
@@ -152,7 +155,11 @@ def evaluate_document(document_id: int, resume: bool = False, db: Session = Depe
             t = threading.Thread(
                 target=_call_llm_with_heartbeat,
                 args=(instr, q),
-                kwargs={"product_context": product_context, "neighbor_titles": neighbor_titles},
+                kwargs={
+                    "product_context": product_context,
+                    "neighbor_titles": neighbor_titles,
+                    "glossary": doc.glossary,
+                },
                 daemon=True,
             )
             t.start()
@@ -274,6 +281,8 @@ def evaluate_single(instruction_id: int, db: Session = Depends(get_db)):
             product_context=product_context,
             section_path=instr.section_path,
             neighbor_titles=neighbor_titles,
+            glossary=doc.glossary if doc else None,
+            diff_hint=instr.diff_hint,
         )
     except EvaluationError as e:
         raise HTTPException(status_code=502, detail={"message": e.message, "advice": e.advice})
