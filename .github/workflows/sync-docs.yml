@@ -26,6 +26,10 @@ jobs:
     name: Sync documentation
     runs-on: self-hosted          # ← запускается на вашем компьютере
 
+    defaults:
+      run:
+        shell: bash
+
     steps:
       - name: Checkout doc-reviewer
         uses: actions/checkout@v4
