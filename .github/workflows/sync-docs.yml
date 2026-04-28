@@ -49,18 +49,13 @@ jobs:
           # или в отдельном месте — укажите реальный путь
           cp -r docs/automation/. ./sync-automation/
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
       - name: Install dependencies
         run: pip install openai pyyaml
 
       - name: Update config for this run
         run: |
           # Прописываем пути к репозиториям (относительно рабочей директории)
-          python3 - <<'EOF'
+          python - <<'EOF'
           import yaml, pathlib
 
           cfg_path = pathlib.Path("sync-automation/config.yml")
@@ -77,7 +72,7 @@ jobs:
         run: |
           MODEL="${{ github.event.inputs.model }}"
           SINCE="${{ github.event.inputs.since || 'HEAD~1' }}"
-          CMD="python3 sync-automation/sync_docs.py --since $SINCE --no-pr"
+          CMD="python sync-automation/sync_docs.py --since $SINCE --no-pr"
           if [ -n "$MODEL" ]; then
             CMD="$CMD --model $MODEL"
           fi
