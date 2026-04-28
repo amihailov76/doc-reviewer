@@ -28,7 +28,7 @@ jobs:
 
     defaults:
       run:
-        shell: bash
+        shell: pwsh
 
     steps:
       - name: Checkout doc-reviewer
@@ -43,63 +43,53 @@ jobs:
           path: mintlify-docs
           token: ${{ secrets.GH_TOKEN }}
 
-      - name: Add Python to PATH
-        shell: pwsh
-        run: |
-          $pythonPath = (Get-Command python -ErrorAction Stop).Source
-          $pythonDir = Split-Path $pythonPath
-          $scriptsDir = Join-Path $pythonDir "Scripts"
-          Add-Content $env:GITHUB_PATH $pythonDir
-          Add-Content $env:GITHUB_PATH $scriptsDir
-          Write-Host "Python: $pythonPath"
-
       - name: Copy automation scripts
         run: |
-          cp -r docs/automation/. ./sync-automation/
+          New-Item -ItemType Directory -Force -Path sync-automation | Out-Null
+          Copy-Item -Recurse -Force docs/automation/* sync-automation/
 
       - name: Install dependencies
         run: pip install openai pyyaml
 
       - name: Update config for this run
         run: |
-          # Прописываем пути к репозиториям (относительно рабочей директории)
-          python - <<'EOF'
+          $script = @"
           import yaml, pathlib
-
-          cfg_path = pathlib.Path("sync-automation/config.yml")
+          cfg_path = pathlib.Path('sync-automation/config.yml')
           cfg = yaml.safe_load(cfg_path.read_text())
-          cfg["repos"]["doc_reviewer"] = "."
-          cfg["repos"]["mintlify_docs"] = "mintlify-docs"
+          cfg['repos']['doc_reviewer'] = '.'
+          cfg['repos']['mintlify_docs'] = 'mintlify-docs'
           cfg_path.write_text(yaml.dump(cfg, allow_unicode=True))
-          EOF
+          "@
+          $script | python
 
       - name: Run sync script
         env:
           PYTHONUNBUFFERED: "1"
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}   # пусто для Ollama — просто не задавайте секрет
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         run: |
-          MODEL="${{ github.event.inputs.model }}"
-          SINCE="${{ github.event.inputs.since || 'HEAD~1' }}"
-          CMD="python sync-automation/sync_docs.py --since $SINCE --no-pr"
-          if [ -n "$MODEL" ]; then
-            CMD="$CMD --model $MODEL"
-          fi
-          $CMD
+          $model = "${{ github.event.inputs.model }}"
+          $since = "${{ github.event.inputs.since }}"
+          if (-not $since) { $since = "HEAD~1" }
+          $cmd = "python sync-automation/sync_docs.py --since $since --no-pr"
+          if ($model) { $cmd += " --model $model" }
+          Invoke-Expression $cmd
 
       - name: Push changes and create PR
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          cd mintlify-docs
-          # Если есть незакоммиченные изменения — создаём PR
-          if git status --porcelain | grep -q .; then
-            BRANCH=$(git rev-parse --abbrev-ref HEAD)
-            gh pr create \
-              --title "docs: sync from doc-reviewer $(date +%Y-%m-%d)" \
-              --body "Автоматическое обновление документации. Triggered by commit ${{ github.sha }}." \
-              --base main \
-              --head "$BRANCH" \
+          Set-Location mintlify-docs
+          $changes = git status --porcelain
+          if ($changes) {
+            $branch = git rev-parse --abbrev-ref HEAD
+            $date = Get-Date -Format 'yyyy-MM-dd'
+            gh pr create `
+              --title "docs: sync from doc-reviewer $date" `
+              --body "Автоматическое обновление документации. Triggered by commit ${{ github.sha }}." `
+              --base main `
+              --head $branch `
               --repo amihailov76/mintlify-docs
-          else
-            echo "Нет изменений для PR"
-          fi
+          } else {
+            Write-Host "Нет изменений для PR"
+          }
