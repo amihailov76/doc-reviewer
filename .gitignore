@@ -21,3 +21,4 @@ debug_*.py
 # Системное
 .DS_Store
 Thumbs.db
+.claude/
