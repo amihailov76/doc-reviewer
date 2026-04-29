@@ -3,20 +3,15 @@
 
 llm:
   # URL API-endpoint (совместимый с OpenAI /v1/chat/completions)
-  api_url: "http://localhost:11434/v1"
+  api_url: "https://api-llm.ml.ptsecurity.ru/v1"
   api_key: ""                  # НЕ храните ключ здесь. Передавайте через переменную окружения LLM_API_KEY.
-                               # Для Ollama оставьте пустым — ключ не нужен.
 
   # Модель по умолчанию; можно переопределить флагом --model
-  default_model: "qwen3:14b"
+  default_model: "openai/gpt-oss-120b"
 
   # Доступные модели (для справки и валидации)
   available_models:
-    - "qwen3:14b"
-    - "qwen3:7b"
-    - "gemma3:12b"
-    - "gemma3:4b"
-    - "gpt-oss"
+    - "openai/gpt-oss-120b"
 
   # Параметры запроса
   temperature: 0.2
