@@ -163,16 +163,38 @@ class LLMClient:
 
     @staticmethod
     def _strip_code_fence(content: str) -> str:
-        """Убирает код-фенсы, которые LLM иногда добавляет вокруг MDX-контента."""
+        """Убирает код-фенсы, которые LLM иногда добавляет вокруг MDX-контента.
+
+        Обрабатывает два случая:
+        1. Весь контент обёрнут в ```...```
+        2. Frontmatter снаружи, тело — внутри ```...```
+        """
         content = content.strip()
+
+        def remove_fence(text: str) -> str:
+            """Снимает один слой код-фенса если он есть."""
+            text = text.strip()
+            if text.startswith("```"):
+                lines = text.splitlines()
+                lines = lines[1:]  # убираем открывающую строку
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]  # убираем закрывающую строку
+                return "\n".join(lines).strip()
+            return text
+
+        # Случай 1: всё содержимое в kod-фенсе
         if content.startswith("```"):
-            lines = content.splitlines()
-            # Убираем первую строку (```mdx, ```markdown, ``` и т.п.)
-            lines = lines[1:]
-            # Убираем последнюю строку если это закрывающий ```
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            content = "\n".join(lines).strip()
+            return remove_fence(content)
+
+        # Случай 2: frontmatter снаружи, тело в kod-фенсе
+        if content.startswith("---"):
+            fm_end = content.find("---", 3)
+            if fm_end != -1:
+                frontmatter = content[:fm_end + 3]
+                body = content[fm_end + 3:].strip()
+                body = remove_fence(body)
+                return frontmatter + "\n\n" + body
+
         return content
 
 
