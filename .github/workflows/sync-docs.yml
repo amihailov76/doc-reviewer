@@ -66,6 +66,7 @@ jobs:
       - name: Run sync script
         env:
           PYTHONUNBUFFERED: "1"
+          PYTHONUTF8: "1"
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         run: |
           $model = "${{ github.event.inputs.model }}"
