@@ -43,6 +43,11 @@ jobs:
           path: mintlify-docs
           token: ${{ secrets.GH_TOKEN }}
 
+      - name: Ensure full git history
+        run: |
+          $shallow = git rev-parse --is-shallow-repository
+          if ($shallow -eq "true") { git fetch --unshallow }
+
       - name: Copy automation scripts
         run: |
           New-Item -ItemType Directory -Force -Path sync-automation | Out-Null
@@ -72,9 +77,9 @@ jobs:
           $model = "${{ github.event.inputs.model }}"
           $since = "${{ github.event.inputs.since }}"
           if (-not $since) { $since = "HEAD~1" }
-          $cmd = "python sync-automation/sync_docs.py --since $since --no-pr"
-          if ($model) { $cmd += " --model $model" }
-          Invoke-Expression $cmd
+          $scriptArgs = @("sync-automation/sync_docs.py", "--since", $since, "--no-pr")
+          if ($model) { $scriptArgs += @("--model", $model) }
+          & python @scriptArgs
 
       - name: Push changes and create PR
         env:
