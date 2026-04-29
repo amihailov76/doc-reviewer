@@ -56,10 +56,10 @@ jobs:
           $script = @"
           import yaml, pathlib
           cfg_path = pathlib.Path('sync-automation/config.yml')
-          cfg = yaml.safe_load(cfg_path.read_text())
+          cfg = yaml.safe_load(cfg_path.read_text(encoding='utf-8'))
           cfg['repos']['doc_reviewer'] = '.'
           cfg['repos']['mintlify_docs'] = 'mintlify-docs'
-          cfg_path.write_text(yaml.dump(cfg, allow_unicode=True))
+          cfg_path.write_text(yaml.dump(cfg, allow_unicode=True), encoding='utf-8')
           "@
           $script | python
 
