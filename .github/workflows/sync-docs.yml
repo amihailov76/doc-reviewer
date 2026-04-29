@@ -31,6 +31,9 @@ jobs:
         shell: powershell
 
     steps:
+      - name: Fix git safe directory
+        run: git config --global --add safe.directory '*'
+
       - name: Checkout doc-reviewer
         uses: actions/checkout@v4
         with:
