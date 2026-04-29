@@ -34,7 +34,7 @@ jobs:
       - name: Checkout doc-reviewer
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2          # нужно для сравнения HEAD~1
+          fetch-depth: 0          # нужна полная история для git diff
 
       - name: Checkout mintlify-docs
         uses: actions/checkout@v4
