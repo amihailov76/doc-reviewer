@@ -28,9 +28,10 @@ from pathlib import Path
 import yaml
 
 try:
+    import httpx
     from openai import OpenAI
 except ImportError:
-    print("Установите зависимости: pip install openai pyyaml")
+    print("Установите зависимости: pip install openai pyyaml httpx")
     sys.exit(1)
 
 
@@ -121,10 +122,21 @@ class LLMClient:
             or "no-key"
         )
 
+        # SSL: по умолчанию проверяем сертификат.
+        # LLM_SSL_VERIFY=false — отключить (для корпоративного прокси).
+        # LLM_CA_BUNDLE=/path/to/ca.crt — указать корпоративный CA-сертификат.
+        ssl_verify: bool | str = True
+        ca_bundle = os.environ.get("LLM_CA_BUNDLE")
+        if ca_bundle:
+            ssl_verify = ca_bundle
+        elif os.environ.get("LLM_SSL_VERIFY", "true").lower() == "false":
+            ssl_verify = False
+
         self.client = OpenAI(
             base_url=llm_cfg["api_url"],
             api_key=api_key,
             timeout=self.timeout,
+            http_client=httpx.Client(verify=ssl_verify),
         )
 
     def complete(self, system: str, user: str) -> str:

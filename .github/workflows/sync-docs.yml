@@ -76,6 +76,7 @@ jobs:
           PYTHONUNBUFFERED: "1"
           PYTHONUTF8: "1"
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_SSL_VERIFY: "false"
         run: |
           $model = "${{ github.event.inputs.model }}"
           $since = "${{ github.event.inputs.since }}"
