@@ -158,7 +158,22 @@ class LLMClient:
                 {"role": "user", "content": user},
             ],
         )
-        return response.choices[0].message.content.strip()
+        content = response.choices[0].message.content.strip()
+        return self._strip_code_fence(content)
+
+    @staticmethod
+    def _strip_code_fence(content: str) -> str:
+        """Убирает код-фенсы, которые LLM иногда добавляет вокруг MDX-контента."""
+        content = content.strip()
+        if content.startswith("```"):
+            lines = content.splitlines()
+            # Убираем первую строку (```mdx, ```markdown, ``` и т.п.)
+            lines = lines[1:]
+            # Убираем последнюю строку если это закрывающий ```
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            content = "\n".join(lines).strip()
+        return content
 
 
 # ─── Промпты ──────────────────────────────────────────────────────────────────
