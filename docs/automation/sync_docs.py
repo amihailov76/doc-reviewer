@@ -122,21 +122,30 @@ class LLMClient:
             or "no-key"
         )
 
-        # SSL: по умолчанию проверяем сертификат.
-        # LLM_SSL_VERIFY=false — отключить (для корпоративного прокси).
-        # LLM_CA_BUNDLE=/path/to/ca.crt — указать корпоративный CA-сертификат.
-        ssl_verify: bool | str = True
+        # SSL и прокси:
+        # LLM_SSL_VERIFY=false  — отключить проверку сертификата.
+        # LLM_CA_BUNDLE=/path  — корпоративный CA-сертификат.
+        # LLM_NO_PROXY=true    — обойти системный прокси (по умолчанию: true).
         ca_bundle = os.environ.get("LLM_CA_BUNDLE")
-        if ca_bundle:
-            ssl_verify = ca_bundle
-        elif os.environ.get("LLM_SSL_VERIFY", "true").lower() == "false":
-            ssl_verify = False
+        ssl_verify: bool | str = ca_bundle if ca_bundle else (
+            os.environ.get("LLM_SSL_VERIFY", "true").lower() != "false"
+        )
+
+        # По умолчанию обходим системный прокси для LLM-эндпоинта —
+        # внутренние API обычно доступны напрямую.
+        bypass_proxy = os.environ.get("LLM_NO_PROXY", "true").lower() != "false"
+        if bypass_proxy:
+            transport = httpx.HTTPTransport(verify=ssl_verify)
+        else:
+            transport = None
+
+        http_client = httpx.Client(verify=ssl_verify, transport=transport)
 
         self.client = OpenAI(
             base_url=llm_cfg["api_url"],
             api_key=api_key,
             timeout=self.timeout,
-            http_client=httpx.Client(verify=ssl_verify),
+            http_client=http_client,
         )
 
     def complete(self, system: str, user: str) -> str:
