@@ -4,12 +4,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - 'README.md'
-      - 'docs/**'
-      - 'CHANGELOG.md'
-      - 'criteria.md'
-      - 'models.yml'
   workflow_dispatch:
     inputs:
       model:
@@ -20,6 +14,10 @@ on:
         description: 'Git ref to diff from (default: HEAD~1)'
         required: false
         default: 'HEAD~1'
+      commit_mode:
+        description: 'Use commit-message mode (yes/no)'
+        required: false
+        default: 'auto'
 
 jobs:
   sync-docs:
@@ -57,7 +55,7 @@ jobs:
           Copy-Item -Recurse -Force docs/automation/* sync-automation/
 
       - name: Install dependencies
-        run: pip install openai pyyaml
+        run: pip install openai pyyaml httpx
 
       - name: Update config for this run
         run: |
@@ -71,18 +69,35 @@ jobs:
           "@
           $script | python
 
+      - name: Check commit message for [docs] tag
+        id: check_docs
+        run: |
+          $msg = git log -1 --format="%s %b"
+          $manualMode = "${{ github.event.inputs.commit_mode }}"
+          if (($msg -match '\[docs\]') -or ($manualMode -eq 'yes')) {
+            "commit_mode=true" >> $env:GITHUB_OUTPUT
+            Write-Host "✅ Режим: commit-message"
+          } else {
+            "commit_mode=false" >> $env:GITHUB_OUTPUT
+            Write-Host "ℹ Режим: file-map"
+          }
+
       - name: Run sync script
         env:
           PYTHONUNBUFFERED: "1"
           PYTHONUTF8: "1"
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_SSL_VERIFY: "false"
+          LLM_NO_PROXY: "true"
         run: |
           $model = "${{ github.event.inputs.model }}"
           $since = "${{ github.event.inputs.since }}"
           if (-not $since) { $since = "HEAD~1" }
           $scriptArgs = @("sync-automation/sync_docs.py", "--since", $since, "--no-pr")
           if ($model) { $scriptArgs += @("--model", $model) }
+          if ("${{ steps.check_docs.outputs.commit_mode }}" -eq "true") {
+            $scriptArgs += "--commit-mode"
+          }
           & python @scriptArgs
 
       - name: Push changes and create PR
