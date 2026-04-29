@@ -76,10 +76,10 @@ jobs:
           $manualMode = "${{ github.event.inputs.commit_mode }}"
           if (($msg -match '\[docs\]') -or ($manualMode -eq 'yes')) {
             "commit_mode=true" >> $env:GITHUB_OUTPUT
-            Write-Host "✅ Режим: commit-message"
+            Write-Host "Mode: commit-message"
           } else {
             "commit_mode=false" >> $env:GITHUB_OUTPUT
-            Write-Host "ℹ Режим: file-map"
+            Write-Host "Mode: file-map"
           }
 
       - name: Run sync script
