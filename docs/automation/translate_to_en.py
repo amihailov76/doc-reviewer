@@ -25,9 +25,10 @@ from pathlib import Path
 import yaml
 
 try:
+    import httpx
     from openai import OpenAI
 except ImportError:
-    print("Установите зависимости: pip install openai pyyaml")
+    print("Установите зависимости: pip install openai pyyaml httpx")
     sys.exit(1)
 
 
@@ -122,10 +123,20 @@ class LLMClient:
             or "no-key"
         )
 
+        # SSL и прокси: обходим системный прокси для внутреннего LLM API.
+        ca_bundle = os.environ.get("LLM_CA_BUNDLE")
+        ssl_verify: bool | str = ca_bundle if ca_bundle else (
+            os.environ.get("LLM_SSL_VERIFY", "true").lower() != "false"
+        )
+        bypass_proxy = os.environ.get("LLM_NO_PROXY", "true").lower() != "false"
+        transport = httpx.HTTPTransport(verify=ssl_verify) if bypass_proxy else None
+        http_client = httpx.Client(verify=ssl_verify, transport=transport)
+
         self.client = OpenAI(
             base_url=llm_cfg["api_url"],
             api_key=api_key,
             timeout=self.timeout,
+            http_client=http_client,
         )
 
     def complete(self, system: str, user: str) -> str:
@@ -138,7 +149,36 @@ class LLMClient:
                 {"role": "user", "content": user},
             ],
         )
-        return response.choices[0].message.content.strip()
+        content = response.choices[0].message.content.strip()
+        return self._strip_code_fence(content)
+
+    @staticmethod
+    def _strip_code_fence(content: str) -> str:
+        """Убирает код-фенсы, которые LLM иногда добавляет вокруг MDX-контента."""
+        content = content.strip()
+
+        def remove_fence(text: str) -> str:
+            text = text.strip()
+            if text.startswith("```"):
+                lines = text.splitlines()
+                lines = lines[1:]
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                return "\n".join(lines).strip()
+            return text
+
+        if content.startswith("```"):
+            return remove_fence(content)
+
+        if content.startswith("---"):
+            fm_end = content.find("---", 3)
+            if fm_end != -1:
+                frontmatter = content[:fm_end + 3]
+                body = content[fm_end + 3:].strip()
+                body = remove_fence(body)
+                return frontmatter + "\n\n" + body
+
+        return content
 
 
 # ─── Промпт ───────────────────────────────────────────────────────────────────
