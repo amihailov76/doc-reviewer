@@ -18,10 +18,32 @@ lint_docs.py — проверка качества MDX-файлов докуме
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 import yaml
+
+
+# ─── Git-операции ────────────────────────────────────────────────────────────
+
+def get_changed_ru_files(repo_path: Path, since: str) -> list[Path]:
+    """Возвращает список ru/*.mdx файлов, изменённых с указанного коммита."""
+    result = subprocess.run(
+        ["git", "diff", "--name-only", since, "HEAD"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode != 0 or not result.stdout:
+        return []
+    return [
+        repo_path / line.strip()
+        for line in result.stdout.splitlines()
+        if line.strip().startswith("ru/") and line.strip().endswith(".mdx")
+    ]
 
 
 # ─── Парсинг frontmatter ──────────────────────────────────────────────────────
@@ -124,10 +146,17 @@ def print_lint_report(errors: list[str], warnings: list[str], label: str = "") -
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Линтер MDX-файлов документации")
-    parser.add_argument("files", nargs="+", help="Файлы для проверки (.mdx)")
+    parser.add_argument(
+        "files", nargs="*",
+        help="Файлы для проверки (.mdx). Если не указаны, используется --since.",
+    )
     parser.add_argument(
         "--repo-path", default=".",
         help="Корень репозитория mintlify-docs (для проверки ссылок)",
+    )
+    parser.add_argument(
+        "--since", default=None,
+        help="Коммит, с которого искать изменённые ru/*.mdx файлы (например HEAD~1)",
     )
     parser.add_argument(
         "--strict", action="store_true",
@@ -136,7 +165,19 @@ def main() -> None:
     args = parser.parse_args()
 
     repo_path = Path(args.repo_path).resolve()
-    files = [Path(f) for f in args.files]
+
+    if args.files:
+        # Явно переданные файлы — резолвим относительно repo_path
+        files = [repo_path / f for f in args.files]
+    elif args.since:
+        # Автоматически определяем изменённые RU-файлы через git diff
+        files = get_changed_ru_files(repo_path, args.since)
+        if not files:
+            print(f"[lint] Нет изменённых ru/*.mdx файлов с {args.since}")
+            return
+        print(f"[lint] Проверяю файлы: {', '.join(f.name for f in files)}")
+    else:
+        parser.error("Укажите файлы или параметр --since")
 
     errors, warnings = lint_files(files, repo_path)
     print_lint_report(errors, warnings)
