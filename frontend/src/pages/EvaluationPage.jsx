@@ -39,8 +39,10 @@ export default function EvaluationPage() {
   const [uploadError, setUploadError] = useState(null)
   const [running, setRunning] = useState(false)
   const [evalError, setEvalError] = useState(null)
-  const [showFeedback, setShowFeedback] = useState(false)
+  const [integral, setIntegral] = useState(null)   // интегральная оценка документа
   const [showScaleInfo, setShowScaleInfo] = useState(false)
+  const [showFeedback, setShowFeedback] = useState(false)
+  const [statusModal, setStatusModal] = useState(null)  // 'green' | 'yellow' | 'orange' | 'red' | null
   const [uploadTab, setUploadTab] = useState('file') // 'file' | 'url'
   const [urlInput, setUrlInput] = useState('')
   const [addUrlInput, setAddUrlInput] = useState('')
@@ -169,6 +171,12 @@ export default function EvaluationPage() {
     if (doc) _loadProjects(doc.project_id)
   }, [doc?.id])
 
+  // Если документ уже оценён — загружаем интегральную оценку
+  useEffect(() => {
+    if (doc && hasEvaluations) loadIntegral(doc.id)
+    else setIntegral(null)
+  }, [doc?.id, hasEvaluations])
+
   async function handleProjectChange(e) {
     const projectId = e.target.value === '' ? null : parseInt(e.target.value)
     setSavingProject(true)
@@ -259,7 +267,10 @@ export default function EvaluationPage() {
       }
       if (event.type === 'done') {
         setSummary(event.summary)
-        if (!event.aborted) setHasEvaluations(true)
+        if (!event.aborted) {
+          setHasEvaluations(true)
+          loadIntegral(doc.id)
+        }
         eventSource.close(); setRunning(false)
       }
     }
@@ -267,6 +278,13 @@ export default function EvaluationPage() {
       setEvalError({ message: 'Соединение с сервером прервано', advice: 'Проверьте, запущен ли бэкенд.' })
       eventSource.close(); setRunning(false)
     }
+  }
+
+  async function loadIntegral(docId) {
+    try {
+      const res = await fetch(`/api/evaluation/document/${docId}/summary`)
+      if (res.ok) setIntegral(await res.json())
+    } catch { /* не критично */ }
   }
 
   async function handleReeval(instructionId) {
@@ -303,7 +321,7 @@ export default function EvaluationPage() {
   async function handleReset() {
     if (!doc) return
     await fetch(`/api/evaluation/document/${doc.id}`, { method: 'DELETE' })
-    setProgress(null); setSummary(null); setEvalError(null); setHasEvaluations(false)
+    setProgress(null); setSummary(null); setEvalError(null); setHasEvaluations(false); setIntegral(null)
     setSections(prev => prev.map(s => ({ ...s, color: null })))
     setSelectedSection(null)
   }
@@ -531,7 +549,12 @@ export default function EvaluationPage() {
                 const total = (summary.green || 0) + (summary.yellow || 0) + (summary.orange || 0) + (summary.red || 0)
                 const pct = total > 0 ? Math.round((summary[color] || 0) / total * 100) : 0
                 return (
-                  <div key={color} className={`summary-block summary-block--${color}`}>
+                  <div
+                    key={color}
+                    className={`summary-block summary-block--${color}${(summary[color] || 0) > 0 ? ' summary-block--clickable' : ''}`}
+                    onClick={() => (summary[color] || 0) > 0 && setStatusModal(color)}
+                    title={(summary[color] || 0) > 0 ? 'Нажмите, чтобы увидеть список разделов' : undefined}
+                  >
                     <span className="summary-block__emoji">{COLOR_EMOJI[color]}</span>
                     <span className="summary-block__count">{summary[color] || 0}</span>
                     <span className="summary-block__label">{COLOR_LABEL[color]}</span>
@@ -547,6 +570,37 @@ export default function EvaluationPage() {
               <button className="btn btn-secondary btn-sm" style={{ marginLeft: 'auto' }} onClick={handleExportXls}>
                 ⬇ Скачать XLS
               </button>
+            </div>
+          )}
+
+          {integral && !running && (
+            <div className="card integral-card">
+              <div className="integral-card__left">
+                <span className={`integral-card__grade integral-card__grade--${integral.grade.toLowerCase()}`}>
+                  {integral.grade}
+                </span>
+                <div className="integral-card__score-wrap">
+                  <span className="integral-card__score">{integral.score}%</span>
+                  <span className="integral-card__label">{integral.grade_label}</span>
+                  <span className="integral-card__meta">
+                    {integral.evaluated_count} из {integral.total_count} разделов оценено
+                  </span>
+                </div>
+              </div>
+              {integral.top_violations.length > 0 && (
+                <div className="integral-card__right">
+                  <span className="integral-card__violations-title">Топ нарушений:</span>
+                  <ol className="integral-card__violations">
+                    {integral.top_violations.map(v => (
+                      <li key={v.criterion_id} className="integral-card__violation">
+                        <span className="integral-card__violation-id">{v.criterion_id}</span>
+                        <span className="integral-card__violation-label">{v.label}</span>
+                        <span className="integral-card__violation-count">{v.error_count}×</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
             </div>
           )}
 
@@ -670,7 +724,65 @@ export default function EvaluationPage() {
       )}
 
       {showScaleInfo && <ScaleInfoModal onClose={() => setShowScaleInfo(false)} />}
+      {statusModal && (
+        <StatusModal
+          color={statusModal}
+          sections={sections}
+          onSelect={s => { selectSection(s); setStatusModal(null) }}
+          onClose={() => setStatusModal(null)}
+        />
+      )}
 
+    </div>
+  )
+}
+
+// ── Модал списка разделов по статусу ─────────────────────────────────────────
+
+function StatusModal({ color, sections, onSelect, onClose }) {
+  const COLOR_EMOJI = { green: '🟢', yellow: '🟡', orange: '🟠', red: '🔴' }
+  const COLOR_LABEL = { green: 'Хорошо', yellow: 'Замечания', orange: 'Проблемы', red: 'Критично' }
+
+  const matched = sections.filter(s => s.color === color)
+
+  function handleCopy() {
+    const text = matched.map(s =>
+      s.page_number ? `${s.title} (стр. ${s.page_number})` : s.title
+    ).join('\n')
+    navigator.clipboard.writeText(text).catch(() => {})
+  }
+
+  return (
+    <div className="scale-modal-overlay" onClick={onClose}>
+      <div className="scale-modal status-modal" onClick={e => e.stopPropagation()}>
+        <div className="scale-modal__header">
+          <h3 className="scale-modal__title">
+            {COLOR_EMOJI[color]} {COLOR_LABEL[color]} — {matched.length} разд.
+          </h3>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button className="btn btn-secondary btn-sm" onClick={handleCopy}>
+              📋 Скопировать список
+            </button>
+            <button className="scale-modal__close" onClick={onClose}>✕</button>
+          </div>
+        </div>
+        <div className="scale-modal__body status-modal__body">
+          {matched.length === 0 ? (
+            <p style={{ color: 'var(--color-text-secondary)', fontSize: 13 }}>Нет разделов с этим статусом.</p>
+          ) : (
+            <ul className="status-modal__list">
+              {matched.map(s => (
+                <li key={s.id} className="status-modal__item" onClick={() => onSelect(s)}>
+                  <span className="status-modal__title">{s.title}</span>
+                  {s.page_number && (
+                    <span className="status-modal__page">стр. {s.page_number}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
@@ -727,10 +839,11 @@ function ScaleInfoModal({ onClose }) {
           <section className="scale-modal__section">
             <h4 className="scale-modal__section-title">Источник критериев</h4>
             <p className="scale-modal__text">
+            <p className="scale-modal__text">
               Критерии оценки основаны на стандартах написания технической документации
               для ИБ-продуктов: структура инструкции, формулировка шагов, наличие
               предварительных условий, описание результата. Активный набор критериев
-              можно посмотреть и изменить в разделе{' '}
+              можно посмотреть и изменить в разделе{''}{' '}
               <strong>Настройки → Критерии</strong>.
             </p>
           </section>
@@ -746,97 +859,14 @@ function ScaleInfoModal({ onClose }) {
 function formatContent(text) {
   const lines = text.split('\n')
   return lines.map((line, i) => {
-    const trimmed = line.trimStart()
-    // Нумерованный список
-    const numMatch = trimmed.match(/^(\d+[.)]\s+)(.*)/)
-    if (numMatch) {
-      return (
-        <div key={i} className="content-step">
-          <span className="content-step__num">{numMatch[1]}</span>
-          <span>{numMatch[2]}</span>
-        </div>
-      )
-    }
-    // Пустая строка → отступ между абзацами
-    if (trimmed === '') return <div key={i} className="content-spacer" />
-    // Обычный абзац
-    return <p key={i} className="content-para">{line}</p>
+    if (!line.trim()) return <br key={i} />
+    if (line.startsWith('# '))   return <h1 key={i} className="preview-h1">{line.slice(2)}</h1>
+    if (line.startsWith('## '))  return <h2 key={i} className="preview-h2">{line.slice(3)}</h2>
+    if (line.startsWith('### ')) return <h3 key={i} className="preview-h3">{line.slice(4)}</h3>
+    if (line.startsWith('- ') || line.startsWith('* '))
+      return <li key={i} className="preview-li">{line.slice(2)}</li>
+    if (/^\d+\.\s/.test(line))
+      return <li key={i} className="preview-li preview-li--num">{line.replace(/^\d+\.\s/, '')}</li>
+    return <p key={i} className="preview-p">{line}</p>
   })
-}
-
-// ── Панель фидбека ────────────────────────────────────────────────────────────
-
-function FeedbackPanel({ section, onReeval, onOverride, running, criteriaLabels }) {
-  const feedback = section._feedback
-  const criteria = section._feedback?.criteria_results || {}
-  const recommendations = section._feedback?.recommendations || []
-  const overrides = section.overrides || {}
-  const criteriaOverrides = overrides.criteria || {}
-  const sectionOverride = overrides.section === true
-
-  if (!feedback) {
-    return <p style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>Загрузка фидбека…</p>
-  }
-
-  return (
-    <div className="feedback-panel">
-      <div className="feedback-panel__header">
-        <span className="feedback-panel__title">💬 Фидбек от LLM</span>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <button
-            className={`btn btn-secondary btn-sm${sectionOverride ? ' override-active' : ''}`}
-            title={sectionOverride ? 'Снять отметку' : 'Пометить раздел как ложное срабатывание'}
-            onClick={() => onOverride('section', null, !sectionOverride)}
-            style={{ fontSize: 12 }}
-          >
-            {sectionOverride ? '⚠️ Ложное срабатывание' : 'Отметить как ложное срабатывание'}
-          </button>
-          <button className="btn-reeval" title="Переоценить" onClick={onReeval} disabled={running}>↺</button>
-        </div>
-      </div>
-
-      {sectionOverride && (
-        <div style={{ fontSize: 12, color: '#854d0e', marginBottom: 8, padding: '6px 10px', background: '#fef9c3', borderRadius: 6, border: '1px solid #fde68a' }}>
-          ⚠️ Раздел помечен как ложное срабатывание — оценка LLM может не учитывать контекст документа
-        </div>
-      )}
-
-      <div className="feedback-criteria">
-        {Object.entries(criteria).map(([key, val]) => {
-          const isOverridden = criteriaOverrides[key] === true
-          return (
-            <span
-              key={key}
-              className={`criteria-badge criteria-badge--${isOverridden ? 'overridden' : val}`}
-              title={criteriaLabels?.[key] || key}
-            >
-              {isOverridden && '⚠️ '}{key}: {isOverridden ? 'ignored' : val}
-            </span>
-          )
-        })}
-      </div>
-
-      {recommendations.length > 0 && (
-        <div className="feedback-recommendations">
-          {recommendations.map((r, i) => {
-            const isOverridden = criteriaOverrides[r.criterion] === true
-            return (
-              <div key={i} className={`feedback-rec${isOverridden ? ' feedback-rec--overridden' : ''}`}>
-                <div className="feedback-rec__criterion">
-                  {isOverridden && <span title="Ложное срабатывание" style={{ marginRight: 4 }}>⚠️</span>}
-                  [{r.criterion}] {criteriaLabels?.[r.criterion]?.split(' — ')[0] || ''}
-                </div>
-                <div className="feedback-rec__text" style={{ opacity: isOverridden ? 0.4 : 1 }}>{r.text}</div>
-                {r.example && <div className="feedback-rec__example" style={{ opacity: isOverridden ? 0.4 : 1 }}>Пример: {r.example}</div>}
-              </div>
-            )
-          })}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function fileIcon(type) {
-  return { pdf: '📕', docx: '📘', md: '📝', txt: '📄', web: '🌐' }[type] || '📄'
 }

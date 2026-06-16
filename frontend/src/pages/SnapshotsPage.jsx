@@ -26,11 +26,21 @@ export default function SnapshotsPage() {
   // Снимки выбранной группы
   const [snapshots, setSnapshots] = useState([])
 
+  // Промежуточные снимки текущего документа
+  const [partialSnapshots, setPartialSnapshots] = useState([])
+  const [selectedPartialIds, setSelectedPartialIds] = useState(new Set())
+
   // Сохранение снимка
   const [savingName, setSavingName] = useState('')
   const [saving, setSaving] = useState(false)
   const [showSaveDialog, setShowSaveDialog] = useState(false)
-  const [saveRole, setSaveRole] = useState('current')
+  const [isPartialSave, setIsPartialSave] = useState(false)
+
+  // Диалог слияния
+  const [showMergeDialog, setShowMergeDialog] = useState(false)
+  const [mergeName, setMergeName] = useState('')
+  const [mergeGroupId, setMergeGroupId] = useState('')
+  const [merging, setMerging] = useState(false)
 
   // Сравнение
   const [snapA, setSnapA] = useState('')
@@ -51,6 +61,12 @@ export default function SnapshotsPage() {
     setComparison(null)
   }, [selectedGroupId])
 
+  // Загружаем промежуточные снимки при смене документа
+  useEffect(() => {
+    if (currentDoc) loadPartialSnapshots(currentDoc.id)
+    else setPartialSnapshots([])
+  }, [currentDoc?.id])
+
   async function loadGroups() {
     const res = await fetch('/api/groups/')
     const data = await res.json()
@@ -62,9 +78,15 @@ export default function SnapshotsPage() {
     const res = await fetch(`/api/groups/${groupId}/snapshots`)
     const data = await res.json()
     setSnapshots(data)
-    // Инициализируем snapA = baseline если есть
     const baseline = data.find(s => s.role === 'baseline')
     if (baseline) setSnapA(String(baseline.id))
+  }
+
+  async function loadPartialSnapshots(docId) {
+    try {
+      const res = await fetch(`/api/snapshots/document/${docId}/partial`)
+      if (res.ok) setPartialSnapshots(await res.json())
+    } catch { /* не критично */ }
   }
 
   async function handleCreateGroup() {
@@ -95,7 +117,36 @@ export default function SnapshotsPage() {
 
   // ── Снимки ─────────────────────────────────────────────────────────────────
 
-  async function handleSaveSnapshot(role) {
+  async function handleSaveSnapshot() {
+    if (!currentDoc) return
+    setSaving(true); setError(null)
+    try {
+      const name = savingName.trim() || currentDoc.filename
+      const body = { name, is_partial: isPartialSave }
+      if (!isPartialSave) {
+        if (!selectedGroupId) { setError('Выберите продуктовую группу'); return }
+        body.group_id = selectedGroupId
+        body.role = 'current'
+      }
+      const res = await fetch(`/api/snapshots/document/${currentDoc.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (!res.ok) { setError(data.detail || 'Ошибка при сохранении снимка'); return }
+      setSavingName('')
+      setShowSaveDialog(false)
+      setIsPartialSave(false)
+      if (isPartialSave) {
+        await loadPartialSnapshots(currentDoc.id)
+      } else {
+        await loadSnapshots(selectedGroupId)
+      }
+    } finally { setSaving(false) }
+  }
+
+  async function handleSaveBaseline() {
     if (!currentDoc || !selectedGroupId) return
     setSaving(true); setError(null)
     try {
@@ -103,7 +154,7 @@ export default function SnapshotsPage() {
       const res = await fetch(`/api/snapshots/document/${currentDoc.id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, role, group_id: selectedGroupId }),
+        body: JSON.stringify({ name, role: 'baseline', group_id: selectedGroupId }),
       })
       const data = await res.json()
       if (!res.ok) { setError(data.detail || 'Ошибка при сохранении снимка'); return }
@@ -116,7 +167,52 @@ export default function SnapshotsPage() {
   async function handleDeleteSnapshot(snapshotId) {
     await fetch(`/api/snapshots/${snapshotId}`, { method: 'DELETE' })
     setComparison(null)
-    await loadSnapshots(selectedGroupId)
+    if (selectedGroupId) await loadSnapshots(selectedGroupId)
+  }
+
+  async function handleDeletePartial(snapshotId) {
+    await fetch(`/api/snapshots/${snapshotId}`, { method: 'DELETE' })
+    setSelectedPartialIds(prev => { const s = new Set(prev); s.delete(snapshotId); return s })
+    if (currentDoc) await loadPartialSnapshots(currentDoc.id)
+  }
+
+  // ── Промежуточные снимки — выбор ───────────────────────────────────────────
+
+  function togglePartialSelect(id) {
+    setSelectedPartialIds(prev => {
+      const s = new Set(prev)
+      s.has(id) ? s.delete(id) : s.add(id)
+      return s
+    })
+  }
+
+  // ── Слияние промежуточных снимков ─────────────────────────────────────────
+
+  async function handleMerge() {
+    if (selectedPartialIds.size === 0) return
+    setMerging(true); setError(null)
+    try {
+      const body = {
+        snapshot_ids: Array.from(selectedPartialIds),
+        name: mergeName.trim() || (currentDoc?.filename + ' (объединённый)'),
+        role: 'current',
+      }
+      if (mergeGroupId) body.group_id = parseInt(mergeGroupId)
+      const res = await fetch('/api/snapshots/merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (!res.ok) { setError(data.detail || 'Ошибка при объединении снимков'); return }
+      setShowMergeDialog(false)
+      setMergeName('')
+      setMergeGroupId('')
+      setSelectedPartialIds(new Set())
+      // Обновляем группу если снимок туда попал
+      if (data.group_id && data.group_id === selectedGroupId) await loadSnapshots(selectedGroupId)
+      if (data.group_id) { setSelectedGroupId(data.group_id); await loadGroups() }
+    } finally { setMerging(false) }
   }
 
   // ── Сравнение ───────────────────────────────────────────────────────────────
@@ -158,6 +254,104 @@ export default function SnapshotsPage() {
         Сравнивайте результаты проверки документа, чтобы понять, улучшился ли он после обновления.<br />
         Используйте продуктовые группы, чтобы просматривать и сравнивать результаты для документации разных продуктов.
       </p>
+
+      {error && <div className="alert alert-error">⚠️ {error}</div>}
+
+      {/* Промежуточные результаты (видны только при загруженном документе) */}
+      {currentDoc && (
+        <div className="card partial-section">
+          <div className="partial-section__header">
+            <div>
+              <span className="partial-section__title">🗂 Промежуточные результаты</span>
+              <span className="partial-section__doc">— {currentDoc.filename}</span>
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              {selectedPartialIds.size >= 1 && (
+                <button className="btn btn-primary btn-sm" onClick={() => setShowMergeDialog(true)}>
+                  ⇒ Объединить выбранные ({selectedPartialIds.size})
+                </button>
+              )}
+              {hasEvaluations && (
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => { setIsPartialSave(true); setShowSaveDialog(true) }}
+                >
+                  + Сохранить промежуточный
+                </button>
+              )}
+            </div>
+          </div>
+
+          {partialSnapshots.length === 0 ? (
+            <p className="partial-section__empty">
+              Нет промежуточных результатов.
+              {hasEvaluations
+                ? ' Оцените часть документа и нажмите «Сохранить промежуточный».'
+                : ' Сначала выполните оценку на вкладке Оценка.'}
+            </p>
+          ) : (
+            <div className="partial-list">
+              {partialSnapshots.map(s => (
+                <div key={s.id} className={`partial-item${selectedPartialIds.has(s.id) ? ' partial-item--selected' : ''}`}>
+                  <label className="partial-item__checkbox">
+                    <input
+                      type="checkbox"
+                      checked={selectedPartialIds.has(s.id)}
+                      onChange={() => togglePartialSelect(s.id)}
+                    />
+                  </label>
+                  <div className="partial-item__info">
+                    <div className="partial-item__name">{s.name}</div>
+                    <div className="partial-item__date">{new Date(s.created_at).toLocaleString('ru')}</div>
+                  </div>
+                  <div className="partial-item__summary">
+                    {['green', 'yellow', 'orange', 'red'].map(c =>
+                      s.data.summary[c] > 0 && (
+                        <span key={c} className="snap-summary-badge">{COLOR_EMOJI[c]} {s.data.summary[c]}</span>
+                      )
+                    )}
+                    <span className="snap-summary-badge snap-summary-badge--total">
+                      {s.data.summary.total} разд.
+                    </span>
+                  </div>
+                  <button className="btn-delete" onClick={() => handleDeletePartial(s.id)} title="Удалить">✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Диалог слияния */}
+          {showMergeDialog && (
+            <div className="merge-dialog">
+              <div className="merge-dialog__row">
+                <input
+                  className="snap-name-input"
+                  placeholder="Название итогового снимка"
+                  value={mergeName}
+                  onChange={e => setMergeName(e.target.value)}
+                  autoFocus
+                />
+                <select
+                  className="doc-type-select"
+                  value={mergeGroupId}
+                  onChange={e => setMergeGroupId(e.target.value)}
+                >
+                  <option value="">— без группы —</option>
+                  {groups.map(g => <option key={g.id} value={g.id}>📁 {g.name}</option>)}
+                </select>
+                <button className="btn btn-primary" onClick={handleMerge} disabled={merging}>
+                  {merging ? 'Объединение…' : 'Объединить'}
+                </button>
+                <button className="btn btn-secondary btn-sm" onClick={() => setShowMergeDialog(false)}>✕</button>
+              </div>
+              <p className="merge-dialog__hint">
+                Из {selectedPartialIds.size} промежуточных результатов будет создан один итоговый снимок.
+                При совпадении разделов побеждает последний по времени результат.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="snapshots-layout">
 
@@ -223,7 +417,7 @@ export default function SnapshotsPage() {
                 </div>
                 <div className="group-header__right">
                   {currentDoc && hasEvaluations && (
-                    <button className="btn btn-primary btn-sm" onClick={() => setShowSaveDialog(v => !v)}>
+                    <button className="btn btn-primary btn-sm" onClick={() => { setIsPartialSave(false); setShowSaveDialog(v => !v) }}>
                       + Сохранить снимок
                     </button>
                   )}
@@ -238,8 +432,8 @@ export default function SnapshotsPage() {
                 </div>
               </div>
 
-              {/* Диалог сохранения */}
-              {showSaveDialog && (
+              {/* Диалог сохранения итогового снимка */}
+              {showSaveDialog && !isPartialSave && (
                 <div className="card save-dialog">
                   <div className="save-dialog__row">
                     <input
@@ -248,10 +442,10 @@ export default function SnapshotsPage() {
                       value={savingName}
                       onChange={e => setSavingName(e.target.value)}
                     />
-                    <button className="btn btn-primary" onClick={() => handleSaveSnapshot('baseline')} disabled={saving}>
+                    <button className="btn btn-primary" onClick={handleSaveBaseline} disabled={saving}>
                       ★ Сохранить как baseline
                     </button>
-                    <button className="btn btn-secondary" onClick={() => handleSaveSnapshot('current')} disabled={saving}>
+                    <button className="btn btn-secondary" onClick={handleSaveSnapshot} disabled={saving}>
                       Сохранить снимок
                     </button>
                     <button className="btn btn-secondary btn-sm" onClick={() => setShowSaveDialog(false)}>✕</button>
@@ -259,9 +453,28 @@ export default function SnapshotsPage() {
                 </div>
               )}
 
-              {error && <div className="alert alert-error">⚠️ {error}</div>}
+              {/* Диалог сохранения промежуточного снимка */}
+              {showSaveDialog && isPartialSave && (
+                <div className="card save-dialog">
+                  <div className="save-dialog__row">
+                    <input
+                      className="snap-name-input"
+                      placeholder={`Название промежуточного результата`}
+                      value={savingName}
+                      onChange={e => setSavingName(e.target.value)}
+                    />
+                    <button className="btn btn-primary" onClick={handleSaveSnapshot} disabled={saving}>
+                      Сохранить промежуточный
+                    </button>
+                    <button className="btn btn-secondary btn-sm" onClick={() => { setShowSaveDialog(false); setIsPartialSave(false) }}>✕</button>
+                  </div>
+                  <p className="save-dialog__hint">
+                    Промежуточный результат сохраняет только оценённые разделы. Позже его можно объединить с другими промежуточными результатами.
+                  </p>
+                </div>
+              )}
 
-              {/* Список снимков */}
+              {/* Список итоговых снимков */}
               {snapshots.length === 0 ? (
                 <div className="card snapshots-empty">
                   <p>В этой группе пока нет снимков.</p>

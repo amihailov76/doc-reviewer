@@ -1,9 +1,10 @@
 """
 Эндпойнты оценки инструкций:
-- GET    /api/evaluation/document/{id}      — оценить весь документ (SSE-стрим прогресса)
-- POST   /api/evaluation/instruction/{id}   — оценить одну инструкцию
-- GET    /api/evaluation/instruction/{id}   — получить результат оценки
-- DELETE /api/evaluation/document/{id}      — сбросить оценку документа
+- GET    /api/evaluation/document/{id}         — оценить весь документ (SSE-стрим прогресса)
+- GET    /api/evaluation/document/{id}/summary — интегральная оценка документа
+- POST   /api/evaluation/instruction/{id}      — оценить одну инструкцию
+- GET    /api/evaluation/instruction/{id}      — получить результат оценки
+- DELETE /api/evaluation/document/{id}         — сбросить оценку документа
 """
 
 import json
@@ -342,3 +343,86 @@ def _serialize_evaluation(evaluation: Evaluation) -> dict:
         "model_used": evaluation.model_used,
         "evaluated_at": evaluation.evaluated_at.isoformat() if evaluation.evaluated_at else None,
     }
+
+
+# Интегральная оценка
+
+COLOR_POINTS = {"green": 3, "yellow": 2, "orange": 1, "red": 0}
+
+GRADE_THRESHOLDS = [
+    (85, "A", "Хорошо"),
+    (65, "B", "Есть замечания"),
+    (40, "C", "Требует доработки"),
+    (0,  "D", "Критично"),
+]
+
+
+def _compute_integral(evaluated: list) -> dict:
+    if not evaluated:
+        return None
+
+    total_points = 0
+    distribution = {"green": 0, "yellow": 0, "orange": 0, "red": 0}
+    violation_counts: dict = {}
+
+    for instr in evaluated:
+        ev = instr.evaluation
+        color = ev.color or "red"
+        total_points += COLOR_POINTS.get(color, 0)
+        if color in distribution:
+            distribution[color] += 1
+        for crit_id, result in (ev.criteria_results or {}).items():
+            if isinstance(result, dict) and result.get("result") == "error":
+                label = result.get("label") or crit_id
+                if crit_id not in violation_counts:
+                    violation_counts[crit_id] = {"label": label, "count": 0}
+                violation_counts[crit_id]["count"] += 1
+
+    n = len(evaluated)
+    score = round(total_points / (n * 3) * 100, 1) if n > 0 else 0.0
+
+    grade = "D"
+    grade_label = "Критично"
+    for threshold, g, gl in GRADE_THRESHOLDS:
+        if score >= threshold:
+            grade = g
+            grade_label = gl
+            break
+
+    top_violations = sorted(
+        [{"criterion_id": k, "label": v["label"], "error_count": v["count"]}
+         for k, v in violation_counts.items()],
+        key=lambda x: x["error_count"],
+        reverse=True,
+    )[:3]
+
+    return {
+        "score": score,
+        "grade": grade,
+        "grade_label": grade_label,
+        "distribution": distribution,
+        "top_violations": top_violations,
+        "evaluated_count": n,
+    }
+
+
+@router.get("/document/{document_id}/summary")
+def get_document_summary(document_id: int, db: Session = Depends(get_db)):
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+
+    instructions = (
+        db.query(Instruction)
+        .filter(Instruction.document_id == document_id)
+        .order_by(Instruction.id)
+        .all()
+    )
+    evaluated = [i for i in instructions if i.evaluation is not None]
+
+    integral = _compute_integral(evaluated)
+    if integral is None:
+        raise HTTPException(status_code=404, detail="Нет оценённых инструкций")
+
+    integral["total_count"] = len(instructions)
+    return integral

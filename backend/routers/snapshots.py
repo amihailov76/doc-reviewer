@@ -1,12 +1,15 @@
 """
 Роутер снимков оценки.
 
-Снимки привязаны к продуктовым группам (group_id), не к документам напрямую.
-document_id и document_filename хранятся как метаданные.
+Итоговые снимки привязаны к продуктовым группам (group_id).
+Промежуточные снимки (is_partial=True) group_id не требуют — хранятся на уровне документа.
+document_id и document_filename хранятся как метаданные в обоих типах.
 
 Эндпойнты:
   GET    /api/snapshots/document/{id}/check-evaluated  — есть ли оценки
-  POST   /api/snapshots/document/{id}                  — создать снимок
+  GET    /api/snapshots/document/{id}/partial          — список промежуточных снимков документа
+  POST   /api/snapshots/document/{id}                  — создать снимок (итоговый или промежуточный)
+  POST   /api/snapshots/merge                          — объединить промежуточные → итоговый снимок
   DELETE /api/snapshots/{id}                           — удалить снимок
   GET    /api/snapshots/compare                        — сравнить два снимка / снимок с текущим
   GET    /api/snapshots/document/{id}/export           — скачать XLS
@@ -18,7 +21,7 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from typing import Optional
+from typing import List, Optional
 
 from backend.database import get_db, Document, Instruction, Evaluation, Snapshot, ProductGroup
 
@@ -31,7 +34,15 @@ COLOR_LABEL = {"green": "Хорошо", "yellow": "Замечания", "orange"
 class CreateSnapshotRequest(BaseModel):
     name: str
     role: str = "current"
-    group_id: int
+    group_id: Optional[int] = None   # обязателен для итоговых; для промежуточных — не нужен
+    is_partial: bool = False
+
+
+class MergeSnapshotsRequest(BaseModel):
+    snapshot_ids: List[int]
+    name: str
+    group_id: Optional[int] = None   # опционально: куда поместить итоговый снимок
+    role: str = "current"
 
 
 def _serialize_snapshot(s: Snapshot) -> dict:
@@ -42,6 +53,7 @@ def _serialize_snapshot(s: Snapshot) -> dict:
         "document_filename": s.document_filename,
         "name": s.name,
         "role": s.role,
+        "is_partial": bool(s.is_partial),
         "created_at": s.created_at.isoformat(),
         "data": s.data,
     }
@@ -57,6 +69,78 @@ def _compute_summary(evaluated: list) -> dict:
     return summary
 
 
+def _compute_summary_from_sections(sections: list) -> dict:
+    """Пересчитывает сводку из списка секций (используется при слиянии снимков)."""
+    summary = {"green": 0, "yellow": 0, "orange": 0, "red": 0, "total": 0}
+    for sec in sections:
+        color = sec.get("color")
+        if color in summary:
+            summary[color] += 1
+        summary["total"] += 1
+    return summary
+
+
+_COLOR_POINTS = {"green": 3, "yellow": 2, "orange": 1, "red": 0}
+_GRADE_THRESHOLDS = [(85, "A", "Хорошо"), (65, "B", "Есть замечания"), (40, "C", "Требует доработки"), (0, "D", "Критично")]
+
+
+def _compute_integral_from_instructions(evaluated: list) -> Optional[dict]:
+    """Вычисляет интегральную оценку из списка оценённых инструкций (для снимка)."""
+    if not evaluated:
+        return None
+    total_points = 0
+    violation_counts: dict = {}
+    for instr in evaluated:
+        ev = instr.evaluation
+        color = ev.color or "red"
+        total_points += _COLOR_POINTS.get(color, 0)
+        for crit_id, result in (ev.criteria_results or {}).items():
+            if isinstance(result, dict) and result.get("result") == "error":
+                label = result.get("label") or crit_id
+                if crit_id not in violation_counts:
+                    violation_counts[crit_id] = {"label": label, "count": 0}
+                violation_counts[crit_id]["count"] += 1
+    n = len(evaluated)
+    score = round(total_points / (n * 3) * 100, 1) if n > 0 else 0.0
+    grade, grade_label = "D", "Критично"
+    for threshold, g, gl in _GRADE_THRESHOLDS:
+        if score >= threshold:
+            grade, grade_label = g, gl
+            break
+    top_violations = sorted(
+        [{"criterion_id": k, "label": v["label"], "error_count": v["count"]} for k, v in violation_counts.items()],
+        key=lambda x: x["error_count"], reverse=True,
+    )[:3]
+    return {"score": score, "grade": grade, "grade_label": grade_label, "top_violations": top_violations, "evaluated_count": n}
+
+
+def _build_snapshot_data(instructions: list) -> dict:
+    """Формирует data-словарь снимка из списка оценённых инструкций."""
+    evaluated = [i for i in instructions if i.evaluation is not None]
+    data = {
+        "sections": [
+            {
+                "title": instr.title,
+                "classification": instr.classification,
+                "page_number": instr.page_number,
+                "color": instr.evaluation.color,
+                "criteria_results": instr.evaluation.criteria_results,
+                "recommendations": instr.evaluation.recommendations,
+                "overrides": instr.evaluation.overrides or {},
+                "model_used": instr.evaluation.model_used,
+                "evaluated_at": instr.evaluation.evaluated_at.isoformat()
+                    if instr.evaluation.evaluated_at else None,
+            }
+            for instr in evaluated
+        ],
+        "summary": _compute_summary(evaluated),
+    }
+    integral = _compute_integral_from_instructions(evaluated)
+    if integral:
+        data["integral"] = integral
+    return data
+
+
 @router.get("/document/{document_id}/check-evaluated")
 def check_evaluated(document_id: int, db: Session = Depends(get_db)):
     count = (
@@ -66,6 +150,25 @@ def check_evaluated(document_id: int, db: Session = Depends(get_db)):
         .count()
     )
     return {"has_evaluations": count > 0, "count": count}
+
+
+@router.get("/document/{document_id}/partial")
+def list_partial_snapshots(document_id: int, db: Session = Depends(get_db)):
+    """Возвращает список промежуточных снимков для указанного документа."""
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+
+    snapshots = (
+        db.query(Snapshot)
+        .filter(
+            Snapshot.document_id == document_id,
+            Snapshot.is_partial == True,
+        )
+        .order_by(Snapshot.created_at.desc())
+        .all()
+    )
+    return [_serialize_snapshot(s) for s in snapshots]
 
 
 @router.get("/document/{document_id}/export")
@@ -154,9 +257,13 @@ def create_snapshot(document_id: int, body: CreateSnapshotRequest, db: Session =
     if not doc:
         raise HTTPException(status_code=404, detail="Документ не найден")
 
-    group = db.query(ProductGroup).filter(ProductGroup.id == body.group_id).first()
-    if not group:
-        raise HTTPException(status_code=404, detail="Продуктовая группа не найдена")
+    # Для итогового снимка группа обязательна
+    if not body.is_partial:
+        if not body.group_id:
+            raise HTTPException(status_code=422, detail="Для итогового снимка укажите group_id")
+        group = db.query(ProductGroup).filter(ProductGroup.id == body.group_id).first()
+        if not group:
+            raise HTTPException(status_code=404, detail="Продуктовая группа не найдена")
 
     instructions = (
         db.query(Instruction)
@@ -168,42 +275,107 @@ def create_snapshot(document_id: int, body: CreateSnapshotRequest, db: Session =
     if not evaluated:
         raise HTTPException(status_code=400, detail="Нет оценённых инструкций. Сначала выполните оценку.")
 
-    snapshot_data = {
-        "sections": [
-            {
-                "title": instr.title,
-                "classification": instr.classification,
-                "page_number": instr.page_number,
-                "color": instr.evaluation.color,
-                "criteria_results": instr.evaluation.criteria_results,
-                "recommendations": instr.evaluation.recommendations,
-                "overrides": instr.evaluation.overrides or {},
-                "model_used": instr.evaluation.model_used,
-                "evaluated_at": instr.evaluation.evaluated_at.isoformat() if instr.evaluation.evaluated_at else None,
-            }
-            for instr in evaluated
-        ],
-        "summary": _compute_summary(evaluated),
-    }
+    snapshot_data = _build_snapshot_data(instructions)
 
-    if body.role == "baseline":
+    # Для итогового снимка-baseline смещаем старый baseline в current
+    if not body.is_partial and body.role == "baseline":
         db.query(Snapshot).filter(
             Snapshot.group_id == body.group_id,
             Snapshot.role == "baseline",
         ).update({"role": "current"}, synchronize_session=False)
 
     snapshot = Snapshot(
-        group_id=body.group_id,
+        group_id=body.group_id if not body.is_partial else None,
         document_id=document_id,
         document_filename=doc.filename,
         name=body.name or doc.filename,
-        role=body.role,
+        role=body.role if not body.is_partial else "partial",
+        is_partial=body.is_partial,
         data=snapshot_data,
     )
     db.add(snapshot)
     db.commit()
     db.refresh(snapshot)
     return _serialize_snapshot(snapshot)
+
+
+@router.post("/merge", status_code=201)
+def merge_snapshots(body: MergeSnapshotsRequest, db: Session = Depends(get_db)):
+    """
+    Объединяет промежуточные снимки в один итоговый.
+
+    Логика слияния: для каждого уникального заголовка раздела берётся
+    результат из снимка с наибольшим created_at (последний побеждает).
+    """
+    if len(body.snapshot_ids) < 1:
+        raise HTTPException(status_code=422, detail="Укажите хотя бы один снимок для объединения")
+
+    # Проверяем и загружаем снимки, сортируем по дате создания (старые первыми)
+    snapshots = (
+        db.query(Snapshot)
+        .filter(Snapshot.id.in_(body.snapshot_ids))
+        .order_by(Snapshot.created_at.asc())
+        .all()
+    )
+    if len(snapshots) != len(body.snapshot_ids):
+        found_ids = {s.id for s in snapshots}
+        missing = [i for i in body.snapshot_ids if i not in found_ids]
+        raise HTTPException(status_code=404, detail=f"Снимки не найдены: {missing}")
+
+    if not all(s.is_partial for s in snapshots):
+        non_partial = [s.id for s in snapshots if not s.is_partial]
+        raise HTTPException(
+            status_code=422,
+            detail=f"Снимки {non_partial} не являются промежуточными. Объединять можно только промежуточные снимки."
+        )
+
+    # Убеждаемся что все снимки относятся к одному документу
+    doc_ids = {s.document_id for s in snapshots}
+    if len(doc_ids) > 1:
+        raise HTTPException(
+            status_code=422,
+            detail="Все снимки должны относиться к одному документу"
+        )
+
+    # Проверяем группу, если указана
+    if body.group_id:
+        group = db.query(ProductGroup).filter(ProductGroup.id == body.group_id).first()
+        if not group:
+            raise HTTPException(status_code=404, detail="Продуктовая группа не найдена")
+
+    # Слияние: итерируем снимки от старых к новым, последний результат по title побеждает
+    merged_by_title: dict = {}
+    for snap in snapshots:
+        for section in snap.data.get("sections", []):
+            merged_by_title[section["title"]] = section
+
+    merged_sections = list(merged_by_title.values())
+    merged_summary = _compute_summary_from_sections(merged_sections)
+
+    # Определяем document_filename из первого снимка
+    document_filename = snapshots[0].document_filename
+    document_id = snapshots[0].document_id
+
+    # Для baseline — снимаем старый baseline
+    if body.role == "baseline" and body.group_id:
+        db.query(Snapshot).filter(
+            Snapshot.group_id == body.group_id,
+            Snapshot.role == "baseline",
+        ).update({"role": "current"}, synchronize_session=False)
+
+    merged_snapshot = Snapshot(
+        group_id=body.group_id,
+        document_id=document_id,
+        document_filename=document_filename,
+        name=body.name,
+        role=body.role,
+        is_partial=False,
+        data={"sections": merged_sections, "summary": merged_summary},
+    )
+    db.add(merged_snapshot)
+    db.commit()
+    db.refresh(merged_snapshot)
+    return _serialize_snapshot(merged_snapshot)
 
 
 @router.delete("/{snapshot_id}", status_code=204)
@@ -253,6 +425,7 @@ def compare_snapshots(
             .all()
         )
         evaluated = [i for i in instructions if i.evaluation is not None]
+        evaluated = [i for i in instructions if i.evaluation is not None]
         if not evaluated:
             raise HTTPException(status_code=400, detail="Нет оценённых инструкций для сравнения.")
         doc = db.query(Document).filter(Document.id == document_id).first()
@@ -262,30 +435,42 @@ def compare_snapshots(
              "overrides": i.evaluation.overrides or {}}
             for i in evaluated
         ]
-        source_b = {"type": "current", "name": "Текущее состояние",
-                    "document_filename": doc.filename if doc else None}
+        source_b = {
+            "type": "current", "document_id": document_id,
+            "document_filename": doc.filename if doc else None,
+        }
 
-    a_by_title = {s["title"]: s for s in sections_a}
-    b_by_title = {s["title"]: s for s in sections_b}
-    diff = []
+    # Строим diff
+    map_a = {s["title"]: s for s in sections_a}
+    map_b = {s["title"]: s for s in sections_b}
+    all_titles = list(dict.fromkeys(list(map_a.keys()) + list(map_b.keys())))
 
-    for title, sec_b in b_by_title.items():
-        if title not in a_by_title:
-            diff.append({**sec_b, "change": "new", "color_a": None})
-            continue
-        sec_a = a_by_title[title]
-        rank_a = COLOR_RANK.get(sec_a["color"], -1)
-        rank_b = COLOR_RANK.get(sec_b["color"], -1)
-        change = "improved" if rank_b < rank_a else "degraded" if rank_b > rank_a else "unchanged"
-        diff.append({**sec_b, "change": change, "color_a": sec_a["color"]})
+    COLOR_ORDER = ["green", "yellow", "orange", "red"]
 
-    for title, sec_a in a_by_title.items():
-        if title not in b_by_title:
-            diff.append({**sec_a, "change": "removed", "color_a": sec_a["color"]})
+    def _change(ca, cb):
+        if ca is None: return "new"
+        if cb is None: return "removed"
+        ia = COLOR_ORDER.index(ca) if ca in COLOR_ORDER else -1
+        ib = COLOR_ORDER.index(cb) if cb in COLOR_ORDER else -1
+        if ia == ib: return "unchanged"
+        return "improved" if ib < ia else "degraded"
 
-    change_order = {"degraded": 0, "new": 1, "removed": 2, "unchanged": 3, "improved": 4}
-    diff.sort(key=lambda x: change_order.get(x["change"], 99))
-    stats = {k: sum(1 for d in diff if d["change"] == k)
-             for k in ("degraded", "improved", "unchanged", "new", "removed")}
+    diff = [
+        {
+            "title": t,
+            "color_a": map_a.get(t, {}).get("color"),
+            "color_b": map_b.get(t, {}).get("color"),
+            "page_number": (map_b.get(t) or map_a.get(t) or {}).get("page_number"),
+            "change": _change(
+                map_a.get(t, {}).get("color"),
+                map_b.get(t, {}).get("color"),
+            ),
+        }
+        for t in all_titles
+    ]
+
+    stats = {"degraded": 0, "improved": 0, "new": 0, "removed": 0, "unchanged": 0}
+    for row in diff:
+        stats[row["change"]] += 1
 
     return {"source_a": source_a, "source_b": source_b, "diff": diff, "stats": stats}

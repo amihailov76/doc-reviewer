@@ -1,4 +1,5 @@
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON, ForeignKey, Boolean
+from sqlalchemy import text as sa_text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -117,13 +118,15 @@ class Snapshot(Base):
     __tablename__ = "snapshots"
 
     id = Column(Integer, primary_key=True, index=True)
-    group_id = Column(Integer, ForeignKey("product_groups.id"), nullable=False)
+    # group_id nullable: промежуточные снимки (is_partial=True) не привязаны к группе
+    group_id = Column(Integer, ForeignKey("product_groups.id"), nullable=True)
     document_id = Column(Integer, nullable=True)
     document_filename = Column(String, nullable=True)
     name = Column(String, nullable=False)
     role = Column(String, default="current")
     created_at = Column(DateTime, default=datetime.utcnow)
     data = Column(JSON, nullable=False)
+    is_partial = Column(Boolean, default=False)   # промежуточный снимок (не требует группы)
 
     group = relationship("ProductGroup", back_populates="snapshots")
 
@@ -157,6 +160,7 @@ def init_db():
     _migrate_create_default_project()
     _migrate_add_glossary_column()
     _migrate_add_diff_hint_column()
+    _migrate_snapshots_v2()
 
 
 def _migrate_models_from_yml():
@@ -293,6 +297,60 @@ def _migrate_add_diff_hint_column():
             ))
             conn.commit()
             log.info("Миграция: добавлена колонка diff_hint в instructions")
+
+
+def _migrate_snapshots_v2():
+    """
+    Обновляет таблицу snapshots:
+    - group_id становится nullable (промежуточные снимки не требуют продуктовой группы)
+    - добавляет колонку is_partial BOOLEAN DEFAULT 0
+    Пересоздаёт таблицу, т.к. SQLite не поддерживает ALTER COLUMN.
+    """
+    with engine.connect() as conn:
+        cols_info = list(conn.execute(sa_text("PRAGMA table_info(snapshots)")))
+        col_names = [row[1] for row in cols_info]
+        col_notnull = {row[1]: row[3] for row in cols_info}  # name → notnull (1 = NOT NULL)
+
+        needs_migration = (
+            "is_partial" not in col_names
+            or col_notnull.get("group_id", 0) == 1  # group_id был NOT NULL
+        )
+        if not needs_migration:
+            return
+
+        # Создаём новую таблицу с нужной схемой
+        conn.execute(sa_text("""
+            CREATE TABLE IF NOT EXISTS snapshots_new (
+                id       INTEGER NOT NULL PRIMARY KEY,
+                group_id INTEGER REFERENCES product_groups(id),
+                document_id       INTEGER,
+                document_filename VARCHAR,
+                name     VARCHAR NOT NULL,
+                role     VARCHAR,
+                created_at DATETIME,
+                data     JSON NOT NULL,
+                is_partial BOOLEAN DEFAULT 0
+            )
+        """))
+
+        # Копируем данные — is_partial добавляем как 0 если колонки ещё не было
+        if "is_partial" in col_names:
+            conn.execute(sa_text(
+                "INSERT INTO snapshots_new "
+                "SELECT id, group_id, document_id, document_filename, "
+                "name, role, created_at, data, is_partial FROM snapshots"
+            ))
+        else:
+            conn.execute(sa_text(
+                "INSERT INTO snapshots_new "
+                "SELECT id, group_id, document_id, document_filename, "
+                "name, role, created_at, data, 0 FROM snapshots"
+            ))
+
+        conn.execute(sa_text("DROP TABLE snapshots"))
+        conn.execute(sa_text("ALTER TABLE snapshots_new RENAME TO snapshots"))
+        conn.commit()
+        log.info("Миграция: snapshots — group_id nullable, добавлена колонка is_partial")
 
 
 def get_active_criteria_content() -> str:
