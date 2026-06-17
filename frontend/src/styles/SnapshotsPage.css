@@ -67,18 +67,40 @@
 
 .snap-item {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
+  flex-direction: column;
   border-radius: 8px;
   border: 1px solid var(--color-border);
   background: var(--color-bg);
-  flex-wrap: wrap;
+  overflow: hidden;
 }
 
 .snap-item--baseline {
   border-color: #f59e0b;
   background: #fffbeb;
+}
+
+.snap-item__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.snap-item__body {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px 10px;
+  border-top: 1px solid var(--color-border);
+  flex-wrap: wrap;
+}
+
+.snap-item__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .snap-item__info {
@@ -108,7 +130,6 @@
   font-size: 12px;
   color: var(--color-text-secondary);
   white-space: nowrap;
-  margin-left: auto;
 }
 
 .snap-item__summary {
@@ -559,4 +580,127 @@
   font-size: 11px;
   color: var(--color-text-secondary);
   font-weight: 500;
+}
+
+/* ── Merge success banner ───────────────────────────────── */
+.merge-success-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #166534;
+  margin-top: 12px;
+}
+.merge-success-banner .btn-close-banner {
+  margin-left: auto;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #166534;
+  font-size: 14px;
+  padding: 0 4px;
+}
+
+/* ── Merge result card ──────────────────────────────────── */
+.merge-result-card {
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-top: 12px;
+}
+.merge-result-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: #166534;
+  font-weight: 500;
+  margin-bottom: 10px;
+}
+.merge-result-card__assign {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.merge-result-card__label {
+  font-size: 13px;
+  color: #374151;
+  white-space: nowrap;
+}
+.merge-result-card__hint {
+  font-size: 12px;
+  color: #166534;
+  margin: 0;
+}
+.btn-close-banner {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #166534;
+  font-size: 14px;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+/* ── Подсказка в секции промежуточных снимков ───────────────── */
+.partial-hint {
+  font-size: 12.5px;
+  color: var(--color-text-secondary);
+  line-height: 1.55;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  padding: 9px 13px;
+  margin-bottom: 12px;
+}
+
+/* ── Интегральная оценка в карточке снимка ──────────────────── */
+.snap-integral {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.snap-integral__grade {
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+.snap-integral__grade--a { background: #dcfce7; color: #166534; }
+.snap-integral__grade--b { background: #fef9c3; color: #854d0e; }
+.snap-integral__grade--c { background: #ffedd5; color: #9a3412; }
+.snap-integral__grade--d { background: #fee2e2; color: #991b1b; }
+
+.snap-integral__verdict {
+  font-size: 12px;
+  font-weight: 600;
+}
+.snap-integral__verdict--a { color: #166534; }
+.snap-integral__verdict--b { color: #854d0e; }
+.snap-integral__verdict--c { color: #9a3412; }
+.snap-integral__verdict--d { color: #991b1b; }
+
+.snap-integral__score {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.snap-integral__violations {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  padding-left: 8px;
+  border-left: 1px solid var(--color-border);
 }

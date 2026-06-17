@@ -563,44 +563,56 @@ export default function EvaluationPage() {
                   </div>
                 )
               })}
-              <button className="scale-info-link" onClick={() => setShowScaleInfo(true)}>
-                Как работает оценка?
-              </button>
               {summary.errors > 0 && <span className="eval-summary__errors">⚠️ {summary.errors} не оценено</span>}
-              <button className="btn btn-secondary btn-sm" style={{ marginLeft: 'auto' }} onClick={handleExportXls}>
-                ⬇ Скачать XLS
-              </button>
             </div>
           )}
 
           {integral && !running && (
             <div className="card integral-card">
-              <div className="integral-card__left">
-                <span className={`integral-card__grade integral-card__grade--${integral.grade.toLowerCase()}`}>
-                  {integral.grade}
-                </span>
-                <div className="integral-card__score-wrap">
-                  <span className="integral-card__score">{integral.score}%</span>
-                  <span className="integral-card__label">{integral.grade_label}</span>
-                  <span className="integral-card__meta">
-                    {integral.evaluated_count} из {integral.total_count} разделов оценено
-                  </span>
-                </div>
+              <div className="integral-card__header">
+                <span className="integral-card__header-title">Итоговая оценка</span>
+                <button className="scale-info-link" onClick={() => setShowScaleInfo(true)}>
+                  Как работает оценка?
+                </button>
               </div>
-              {integral.top_violations.length > 0 && (
-                <div className="integral-card__right">
-                  <span className="integral-card__violations-title">Топ нарушений:</span>
-                  <ol className="integral-card__violations">
-                    {integral.top_violations.map(v => (
-                      <li key={v.criterion_id} className="integral-card__violation">
-                        <span className="integral-card__violation-id">{v.criterion_id}</span>
-                        <span className="integral-card__violation-label">{v.label}</span>
-                        <span className="integral-card__violation-count">{v.error_count}×</span>
-                      </li>
-                    ))}
-                  </ol>
+              <div className="integral-card__body">
+                <div className="integral-card__left">
+                  <span className={`integral-card__grade integral-card__grade--${integral.grade.toLowerCase()}`}>
+                    {integral.grade}
+                  </span>
+                  <div className="integral-card__score-wrap">
+                    <span className={`integral-card__verdict integral-card__verdict--${integral.grade.toLowerCase()}`}>
+                      {integral.grade_label}
+                    </span>
+                    <span className="integral-card__score">{integral.score}%</span>
+                    <span className="integral-card__meta">
+                      {integral.evaluated_count} из {integral.total_count} разделов оценено
+                    </span>
+                  </div>
                 </div>
-              )}
+                {integral.top_violations.length > 0 && (
+                  <div className="integral-card__right">
+                    <span className="integral-card__violations-title">Частые нарушения:</span>
+                    <ol className="integral-card__violations">
+                      {integral.top_violations.map(v => (
+                        <li key={v.criterion_id} className="integral-card__violation">
+                          <span className="integral-card__violation-id">{v.criterion_id}</span>
+                          <span className="integral-card__violation-label">{v.label}</span>
+                          <span className="integral-card__violation-count">{v.error_count}×</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+              </div>
+              <div className="integral-card__footer">
+                <button className="btn btn-secondary btn-sm" onClick={handleExportXls}>
+                  ⬇ Скачать XLS
+                </button>
+                <span className="integral-card__footer-hint">
+                  Хотите зафиксировать результат? Перейдите в раздел <strong>Снимки</strong>
+                </span>
+              </div>
             </div>
           )}
 
@@ -837,13 +849,34 @@ function ScaleInfoModal({ onClose }) {
           </section>
 
           <section className="scale-modal__section">
+            <h4 className="scale-modal__section-title">Итоговая оценка документа</h4>
+            <div className="scale-modal__scale">
+              {[
+                { grade: 'A', color: 'green',  label: 'Полностью соответствует',     range: '≥ 85%' },
+                { grade: 'B', color: 'yellow', label: 'Соответствует с замечаниями', range: '65–84%' },
+                { grade: 'C', color: 'orange', label: 'Не соответствует',            range: '40–64%' },
+                { grade: 'D', color: 'red',    label: 'Полностью не соответствует',  range: '< 40%' },
+              ].map(({ grade, color, label, range }) => (
+                <div key={grade} className={`scale-modal__row scale-modal__row--${color}`}>
+                  <span className={`integral-card__grade integral-card__grade--${grade.toLowerCase()} scale-modal__grade-badge`}>{grade}</span>
+                  <span className="scale-modal__color-label">{label}</span>
+                  <span className="scale-modal__rule">{range}</span>
+                </div>
+              ))}
+            </div>
+            <p className="scale-modal__text" style={{ marginTop: 10 }}>
+              Балл = сумма очков всех разделов / (кол-во разделов × 3) × 100%.
+              Каждый раздел приносит: 🟢 3 очка, 🟡 2 очка, 🟠 1 очко, 🔴 0 очков.
+            </p>
+          </section>
+
+          <section className="scale-modal__section">
             <h4 className="scale-modal__section-title">Источник критериев</h4>
-            <p className="scale-modal__text">
             <p className="scale-modal__text">
               Критерии оценки основаны на стандартах написания технической документации
               для ИБ-продуктов: структура инструкции, формулировка шагов, наличие
               предварительных условий, описание результата. Активный набор критериев
-              можно посмотреть и изменить в разделе{''}{' '}
+              можно посмотреть и изменить в разделе{' '}
               <strong>Настройки → Критерии</strong>.
             </p>
           </section>
@@ -852,6 +885,76 @@ function ScaleInfoModal({ onClose }) {
       </div>
     </div>
   )
+}
+
+// ── Панель фидбека ────────────────────────────────────────────────────────────
+
+function FeedbackPanel({ section, onReeval, onOverride, running, criteriaLabels }) {
+  const feedback = section._feedback
+  const criteria = section._feedback?.criteria_results || {}
+  const recommendations = section._feedback?.recommendations || []
+  const overrides = section.overrides || {}
+  const criteriaOverrides = overrides.criteria || {}
+  const sectionOverride = overrides.section === true
+
+  if (!feedback) {
+    return <p style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>Загрузка фидбека…</p>
+  }
+
+  return (
+    <div className="feedback-panel">
+      <div className="feedback-panel__header">
+        <span className="feedback-panel__title">💬 Фидбек от LLM</span>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <button
+            className={`btn btn-secondary btn-sm${sectionOverride ? ' override-active' : ''}`}
+            title={sectionOverride ? 'Снять отметку' : 'Пометить раздел как ложное срабатывание'}
+            onClick={() => onOverride('section', null, !sectionOverride)}
+            style={{ fontSize: 12 }}
+          >
+            {sectionOverride ? '⚠️ Ложное срабатывание' : 'Отметить как ложное срабатывание'}
+          </button>
+          <button className="btn-reeval" title="Переоценить" onClick={onReeval} disabled={running}>↺</button>
+        </div>
+      </div>
+      {sectionOverride && (
+        <div style={{ fontSize: 12, color: '#854d0e', marginBottom: 8, padding: '6px 10px', background: '#fef9c3', borderRadius: 6, border: '1px solid #fde68a' }}>
+          ⚠️ Раздел помечен как ложное срабатывание — оценка LLM может не учитывать контекст документа
+        </div>
+      )}
+      <div className="feedback-criteria">
+        {Object.entries(criteria).map(([key, val]) => {
+          const isOverridden = criteriaOverrides[key] === true
+          return (
+            <span key={key} className={`criteria-badge criteria-badge--${isOverridden ? 'overridden' : val}`} title={criteriaLabels?.[key] || key}>
+              {isOverridden && '⚠️ '}{key}: {isOverridden ? 'ignored' : val}
+            </span>
+          )
+        })}
+      </div>
+      {recommendations.length > 0 && (
+        <div className="feedback-recommendations">
+          {recommendations.map((r, i) => {
+            const isOverridden = criteriaOverrides[r.criterion] === true
+            return (
+              <div key={i} className={`feedback-rec${isOverridden ? ' feedback-rec--overridden' : ''}`}>
+                <div className="feedback-rec__criterion">
+                  {isOverridden && <span title="Ложное срабатывание" style={{ marginRight: 4 }}>⚠️</span>}
+                  [{r.criterion}] {criteriaLabels?.[r.criterion]?.split(' — ')[0] || ''}
+                </div>
+                <div className="feedback-rec__text" style={{ opacity: isOverridden ? 0.4 : 1 }}>{r.text}</div>
+                {r.example && <div className="feedback-rec__example" style={{ opacity: isOverridden ? 0.4 : 1 }}>Пример: {r.example}</div>}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function fileIcon(type) {
+  return { pdf: '📕', docx: '📘', md: '📝', txt: '📄', web: '🌐' }[type] || '📄'
 }
 
 // ── Форматирование текста раздела ─────────────────────────────────────────────

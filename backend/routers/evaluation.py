@@ -9,6 +9,7 @@
 
 import json
 import queue
+import re
 import threading
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends
@@ -350,17 +351,33 @@ def _serialize_evaluation(evaluation: Evaluation) -> dict:
 COLOR_POINTS = {"green": 3, "yellow": 2, "orange": 1, "red": 0}
 
 GRADE_THRESHOLDS = [
-    (85, "A", "Хорошо"),
-    (65, "B", "Есть замечания"),
-    (40, "C", "Требует доработки"),
-    (0,  "D", "Критично"),
+    (85, "A", "Полностью соответствует"),
+    (65, "B", "Соответствует с замечаниями"),
+    (40, "C", "Не соответствует"),
+    (0,  "D", "Полностью не соответствует"),
 ]
+
+
+def _get_criteria_labels() -> dict:
+    """Возвращает {criterion_id: name} из активного набора критериев."""
+    try:
+        from backend.database import get_active_criteria_content
+        content = get_active_criteria_content()
+        if not content:
+            return {}
+        result = {}
+        for m in re.finditer(r"###\s+(\d+[\.\d]*)\s+(.+?)(?:\n|$)", content):
+            result[m.group(1).strip()] = m.group(2).strip()
+        return result
+    except Exception:
+        return {}
 
 
 def _compute_integral(evaluated: list) -> dict:
     if not evaluated:
         return None
 
+    labels = _get_criteria_labels()
     total_points = 0
     distribution = {"green": 0, "yellow": 0, "orange": 0, "red": 0}
     violation_counts: dict = {}
@@ -371,11 +388,11 @@ def _compute_integral(evaluated: list) -> dict:
         total_points += COLOR_POINTS.get(color, 0)
         if color in distribution:
             distribution[color] += 1
+        # criteria_results хранится как плоский словарь {"1.1": "ok"/"warning"/"error"}
         for crit_id, result in (ev.criteria_results or {}).items():
-            if isinstance(result, dict) and result.get("result") == "error":
-                label = result.get("label") or crit_id
+            if result == "error":
                 if crit_id not in violation_counts:
-                    violation_counts[crit_id] = {"label": label, "count": 0}
+                    violation_counts[crit_id] = {"label": labels.get(crit_id) or crit_id, "count": 0}
                 violation_counts[crit_id]["count"] += 1
 
     n = len(evaluated)
@@ -408,6 +425,43 @@ def _compute_integral(evaluated: list) -> dict:
 
 @router.get("/document/{document_id}/summary")
 def get_document_summary(document_id: int, db: Session = Depends(get_db)):
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+
+    instructions = (
+        db.query(Instruction)
+        .filter(Instruction.document_id == document_id)
+        .order_by(Instruction.id)
+        .all()
+    )
+    evaluated = [i for i in instructions if i.evaluation is not None]
+
+    integral = _compute_integral(evaluated)
+    if integral is None:
+        raise HTTPException(status_code=404, detail="Нет оценённых инструкций")
+
+    integral["total_count"] = len(instructions)
+    return integral_summary(document_id: int, db: Session = Depends(get_db)):
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+
+    instructions = (
+        db.query(Instruction)
+        .filter(Instruction.document_id == document_id)
+        .order_by(Instruction.id)
+        .all()
+    )
+    evaluated = [i for i in instructions if i.evaluation is not None]
+
+    integral = _compute_integral(evaluated)
+    if integral is None:
+        raise HTTPException(status_code=404, detail="Нет оценённых инструкций")
+
+    integral["total_count"] = len(instructions)
+    return integral
+_summary(document_id: int, db: Session = Depends(get_db)):
     doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Документ не найден")

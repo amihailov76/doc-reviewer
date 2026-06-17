@@ -90,8 +90,17 @@ playwright install chromium
 
 #### Требования
 
-- **Python 3.11** (версии 3.12+ не поддерживаются из-за PyMuPDF)
+- **Python 3.11** — обязательно именно 3.11; PyMuPDF не совместим с Python 3.12+
 - **Node.js** 18+
+
+Проверьте, что Python 3.11 установлен:
+
+```bash
+py -3.11 --version
+# Python 3.11.x
+```
+
+Если команда не найдена — скачайте Python 3.11 с [python.org](https://www.python.org/downloads/) (раздел «Looking for a specific release»).
 
 #### 1. Клонировать репозиторий
 
@@ -100,43 +109,57 @@ git clone https://github.com/amihailov76/doc-reviewer.git
 cd doc-reviewer
 ```
 
-#### 2. Установить зависимости бэкенда
+#### 2. Создать виртуальное окружение и установить зависимости
 
 ```bash
-py -3.11 -m pip install -r requirements.txt
+py -3.11 -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
-#### 2а. Установить браузер для парсинга веб-страниц
+> Виртуальное окружение изолирует зависимости проекта от системного Python. После активации `(venv)` появится в начале строки терминала. При следующих запусках достаточно выполнять только `venv\Scripts\activate`, а не пересоздавать окружение.
 
-Playwright требует отдельной установки Chromium после установки Python-пакета:
+#### 2а. Установить браузер для парсинга веб-страниц (опционально)
+
+Если планируете загружать документы по URL — установите Chromium. Выполняется один раз при активированном venv:
 
 ```bash
-py -3.11 -m playwright install chromium
+playwright install chromium
 ```
 
-> Это однократная операция. Chromium (~300 МБ) устанавливается глобально и не входит в `requirements.txt`.
+Chromium (~300 МБ) устанавливается глобально и не входит в `requirements.txt`. Без него вкладка **По ссылке** в разделе **Оценка** работать не будет.
 
 #### 3. Запустить бэкенд
 
+Убедитесь, что venv активировано (`(venv)` в начале строки), затем:
+
 ```bash
-py -3.11 run_dev.py
-# http://localhost:8000
+python run_dev.py
 ```
 
-Проверка: `http://localhost:8000/api/ping` → `{"status":"ok"}`
+Бэкенд запустится на `http://localhost:8000`. Проверка: `http://localhost:8000/api/ping` → `{"status":"ok"}`
+
+> **Предупреждения при запуске не являются стопперами.** При старте бэкенда могут появляться предупреждения вида `DeprecationWarning`, `UserWarning` от SQLAlchemy, pymorphy3 или других библиотек. Это ожидаемое поведение — сервер запустится корректно. Стоппером является только явная ошибка (`ERROR` / `Exception`) или отсутствие строки `Application startup complete` в выводе.
 
 #### 4. Установить зависимости фронтенда и запустить
+
+В **отдельном** терминале (venv здесь не нужен):
 
 ```bash
 cd frontend
 npm install
 npm run dev
-# http://localhost:5173
 ```
+
+Vite запустит dev-сервер на `http://localhost:5173`.
+
+> **Предупреждения при сборке фронтенда** (`warnings` от Vite/ESLint о неиспользуемых переменных, PropTypes и т.п.) не препятствуют работе приложения. Смотрите только на ошибки (`error`), которые прерывают сборку.
 
 #### 5. Открыть в браузере
 
 Перейдите на `http://localhost:5173` и настройте LLM-модель на вкладке **Настройки**.
+
+Бэкенд (`python run_dev.py`) и фронтенд (`npm run dev`) должны работать одновременно в двух отдельных терминалах.
 
 ---
 
@@ -481,6 +504,43 @@ yake==0.4.8
 
 ---
 
+## Трек 2 (доработка): редизайн панелей и исправление багов
+
+### Исправленные баги
+
+**Топ-3 нарушений всегда пустой.** `_compute_integral()` в `evaluation.py` и `_compute_integral_from_instructions()` в `snapshots.py` проверяли `isinstance(result, dict) and result.get("result") == "error"`, но `criteria_results` хранит плоские строки `{"1.1": "ok"}`, а не вложенные словари. Исправлено: проверка заменена на `result == "error"`.
+
+**Дублирование разделов в частичных снимках.** При создании частичного снимка (`is_partial=True`) захватывались все оценённые разделы документа, а не только текущий выбор. Исправлено: в `create_snapshot()` добавлена фильтрация по `include_in_evaluation == 1` для частичных снимков.
+
+### Новые функции в бэкенде
+
+- `_get_criteria_labels()` — добавлена в `evaluation.py` и `snapshots.py`; парсит активный набор критериев и возвращает `{id: name}` для отображения в топ-3.
+- `_compute_integral_from_sections()` в `snapshots.py` — вычисляет интеграл из списка секций (data["sections"]); используется при слиянии снимков.
+- `merge_snapshots()` теперь вычисляет и сохраняет `integral` в объединённый снимок.
+- `GET /api/snapshots/{snapshot_id}/export` — новый эндпойнт; скачивает XLS-отчёт по конкретному снимку (не документу).
+- Обновлены метки `_GRADE_THRESHOLDS`: теперь A=«Полностью соответствует», B=«Соответствует с замечаниями», C=«Не соответствует», D=«Полностью не соответствует».
+
+### Изменения в интерфейсе
+
+**EvaluationPage.** Панель «Итоговая оценка» переработана: появились заголовок с кнопкой «Как работает оценка?», цветной вердикт, подвал с кнопкой XLS и подсказкой про снимки. Кнопки XLS и «Как работает оценка?» убраны из summary-бара. В `ScaleInfoModal` добавлена секция с объяснением шкалы A–D.
+
+**SnapshotsPage.** Карточки итоговых снимков теперь показывают интегральную оценку (грейд, вердикт, балл, топ-нарушения) и кнопку «⬇ XLS». Добавлен hint-блок в секцию промежуточных снимков.
+
+### Затронутые файлы
+
+| Файл | Характер изменений |
+|---|---|
+| `backend/routers/evaluation.py` | +`import re`, +`_get_criteria_labels()`, обновлены `GRADE_THRESHOLDS`, исправлен `_compute_integral()` |
+| `backend/routers/snapshots.py` | +`import re`, +`_get_criteria_labels()`, +`_compute_integral_from_sections()`, обновлены `_GRADE_THRESHOLDS`, исправлен `_compute_integral_from_instructions()`, исправлен `create_snapshot()`, обновлён `merge_snapshots()`, +`GET /{snapshot_id}/export` |
+| `frontend/src/pages/EvaluationPage.jsx` | редизайн integral-card, ScaleInfoModal +секция A–D, summary-bar упрощён |
+| `frontend/src/styles/EvaluationPage.css` | полная замена стилей `.integral-card*`, +`.scale-modal__grade-badge` |
+| `frontend/src/pages/SnapshotsPage.jsx` | +`handleExportSnapshotXls()`, +hint-блок, редизайн snap-item |
+| `frontend/src/styles/SnapshotsPage.css` | редизайн `.snap-item`, +`.partial-hint`, +`.snap-integral*` |
+
+Перезапуск бэкенда обязателен (`.py`-файлы). Фронтенд подхватывается Vite автоматически.
+
+---
+
 ## Известные ограничения
 
 - **Python 3.11** — PyMuPDF несовместим с Python 3.12+
@@ -506,6 +566,9 @@ yake==0.4.8
 - [x] Этап 9: Оценка веб-страниц по URL (Playwright)
 - [x] Этап 10: Проекты и контекст продукта
 - [x] Этап 11: Качество парсинга и улучшение промптов
+- [x] Трек 1: Промежуточные снимки (is_partial, merge, UI в SnapshotsPage)
+- [x] Трек 2: Интегральная оценка документа (grade A–D, top-3 нарушений, карточка в EvaluationPage; редизайн панели + карточек снимков)
+- [x] Трек 3: Модальное окно по клику на светофор (StatusModal, список разделов по цвету, копирование)
 
 ### Запуск тестов
 

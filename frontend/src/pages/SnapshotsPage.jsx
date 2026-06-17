@@ -41,6 +41,10 @@ export default function SnapshotsPage() {
   const [mergeName, setMergeName] = useState('')
   const [mergeGroupId, setMergeGroupId] = useState('')
   const [merging, setMerging] = useState(false)
+  const [mergeSuccess, setMergeSuccess] = useState(null) // { id, name, group_id }
+  const [assignGroupId, setAssignGroupId] = useState('')
+  const [assignRole, setAssignRole] = useState('current')
+  const [assigning, setAssigning] = useState(false)
 
   // Сравнение
   const [snapA, setSnapA] = useState('')
@@ -170,10 +174,32 @@ export default function SnapshotsPage() {
     if (selectedGroupId) await loadSnapshots(selectedGroupId)
   }
 
+  async function handleAssignGroup() {
+    if (!mergeSuccess || !assignGroupId) return
+    setAssigning(true)
+    try {
+      const res = await fetch(`/api/snapshots/${mergeSuccess.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ group_id: parseInt(assignGroupId), role: assignRole }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setError(data.detail || 'Ошибка при назначении группы'); return }
+      setMergeSuccess(null)
+      await loadGroups()
+      setSelectedGroupId(data.group_id)
+      await loadSnapshots(data.group_id)
+    } finally { setAssigning(false) }
+  }
+
   async function handleDeletePartial(snapshotId) {
     await fetch(`/api/snapshots/${snapshotId}`, { method: 'DELETE' })
     setSelectedPartialIds(prev => { const s = new Set(prev); s.delete(snapshotId); return s })
     if (currentDoc) await loadPartialSnapshots(currentDoc.id)
+  }
+
+  function handleExportSnapshotXls(snapshotId, snapshotName) {
+    window.location.href = `/api/snapshots/${snapshotId}/export`
   }
 
   // ── Промежуточные снимки — выбор ───────────────────────────────────────────
@@ -209,9 +235,17 @@ export default function SnapshotsPage() {
       setMergeName('')
       setMergeGroupId('')
       setSelectedPartialIds(new Set())
-      // Обновляем группу если снимок туда попал
-      if (data.group_id && data.group_id === selectedGroupId) await loadSnapshots(selectedGroupId)
-      if (data.group_id) { setSelectedGroupId(data.group_id); await loadGroups() }
+      setMergeSuccess({ id: data.id, name: data.name, group_id: data.group_id })
+      setAssignGroupId('')
+      setAssignRole('current')
+      // Перезагружаем промежуточные снимки
+      if (currentDoc) await loadPartialSnapshots(currentDoc.id)
+      // Если снимок попал в группу — переключаемся на неё
+      if (data.group_id) {
+        await loadGroups()
+        setSelectedGroupId(data.group_id)
+        await loadSnapshots(data.group_id)
+      }
     } finally { setMerging(false) }
   }
 
@@ -282,6 +316,11 @@ export default function SnapshotsPage() {
             </div>
           </div>
 
+          <div className="partial-hint">
+            💡 Оцените документ по частям: выберите разделы на вкладке <strong>Оценка</strong>,
+            сохраните промежуточный результат, затем объедините несколько промежуточных в итоговый снимок.
+          </div>
+
           {partialSnapshots.length === 0 ? (
             <p className="partial-section__empty">
               Нет промежуточных результатов.
@@ -347,6 +386,69 @@ export default function SnapshotsPage() {
               <p className="merge-dialog__hint">
                 Из {selectedPartialIds.size} промежуточных результатов будет создан один итоговый снимок.
                 При совпадении разделов побеждает последний по времени результат.
+              </p>
+            </div>
+          )}
+
+          {/* Результат слияния: назначение в группу */}
+          {mergeSuccess && (
+            <div className="merge-result-card">
+              <div className="merge-result-card__header">
+                <span>✅ Снимок «{mergeSuccess.name}» создан</span>
+                <button className="btn-close-banner" onClick={() => setMergeSuccess(null)}>✕</button>
+              </div>
+              {!mergeSuccess.group_id && (
+                <div className="merge-result-card__assign">
+                  <span className="merge-result-card__label">Сохранить в группу:</span>
+                  <select
+                    className="doc-type-select"
+                    value={assignGroupId}
+                    onChange={e => setAssignGroupId(e.target.value)}
+                  >
+                    <option value="">— выберите группу —</option>
+                    {groups.map(g => <option key={g.id} value={g.id}>📁 {g.name}</option>)}
+                  </select>
+                  <select
+                    className="doc-type-select"
+                    value={assignRole}
+                    onChange={e => setAssignRole(e.target.value)}
+                  >
+                    <option value="current">снимок</option>
+                    <option value="baseline">★ baseline</option>
+                  </select>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={handleAssignGroup}
+                    disabled={assigning || !assignGroupId}
+                  >
+                    {assigning ? 'Сохранение…' : 'Сохранить'}
+                  </button>
+                </div>
+              )}
+              {mergeSuccess.group_id && (
+                <p className="merge-result-card__hint">Снимок добавлен в группу — см. список ниже.</p>
+              )}
+            </div>
+          )}
+
+          {/* Диалог сохранения промежуточного снимка */}
+          {showSaveDialog && isPartialSave && (
+            <div className="card save-dialog">
+              <div className="save-dialog__row">
+                <input
+                  className="snap-name-input"
+                  placeholder="Название промежуточного результата"
+                  value={savingName}
+                  onChange={e => setSavingName(e.target.value)}
+                  autoFocus
+                />
+                <button className="btn btn-primary" onClick={handleSaveSnapshot} disabled={saving}>
+                  Сохранить промежуточный
+                </button>
+                <button className="btn btn-secondary btn-sm" onClick={() => { setShowSaveDialog(false); setIsPartialSave(false) }}>✕</button>
+              </div>
+              <p className="save-dialog__hint">
+                Промежуточный результат сохраняет только оценённые разделы. Позже его можно объединить с другими промежуточными результатами.
               </p>
             </div>
           )}
@@ -453,27 +555,6 @@ export default function SnapshotsPage() {
                 </div>
               )}
 
-              {/* Диалог сохранения промежуточного снимка */}
-              {showSaveDialog && isPartialSave && (
-                <div className="card save-dialog">
-                  <div className="save-dialog__row">
-                    <input
-                      className="snap-name-input"
-                      placeholder={`Название промежуточного результата`}
-                      value={savingName}
-                      onChange={e => setSavingName(e.target.value)}
-                    />
-                    <button className="btn btn-primary" onClick={handleSaveSnapshot} disabled={saving}>
-                      Сохранить промежуточный
-                    </button>
-                    <button className="btn btn-secondary btn-sm" onClick={() => { setShowSaveDialog(false); setIsPartialSave(false) }}>✕</button>
-                  </div>
-                  <p className="save-dialog__hint">
-                    Промежуточный результат сохраняет только оценённые разделы. Позже его можно объединить с другими промежуточными результатами.
-                  </p>
-                </div>
-              )}
-
               {/* Список итоговых снимков */}
               {snapshots.length === 0 ? (
                 <div className="card snapshots-empty">
@@ -484,25 +565,52 @@ export default function SnapshotsPage() {
                   <div className="snap-list">
                     {snapshots.map(s => (
                       <div key={s.id} className={`snap-item${s.role === 'baseline' ? ' snap-item--baseline' : ''}`}>
-                        <div className="snap-item__info">
-                          <span className="snap-item__role">{s.role === 'baseline' ? '★ baseline' : 'снимок'}</span>
-                          <div>
-                            <div className="snap-item__name">{s.name}</div>
-                            {s.document_filename && s.document_filename !== s.name && (
-                              <div className="snap-item__file">📄 {s.document_filename}</div>
-                            )}
-                            <div className="snap-item__date">{new Date(s.created_at).toLocaleString('ru')}</div>
+                        <div className="snap-item__header">
+                          <div className="snap-item__info">
+                            <span className="snap-item__role">{s.role === 'baseline' ? '★ baseline' : 'снимок'}</span>
+                            <div>
+                              <div className="snap-item__name">{s.name}</div>
+                              {s.document_filename && s.document_filename !== s.name && (
+                                <div className="snap-item__file">📄 {s.document_filename}</div>
+                              )}
+                              <div className="snap-item__date">{new Date(s.created_at).toLocaleString('ru')}</div>
+                            </div>
+                          </div>
+                          <div className="snap-item__actions">
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => handleExportSnapshotXls(s.id, s.name)}
+                              title="Скачать XLS"
+                            >⬇ XLS</button>
+                            <button className="btn-delete" onClick={() => handleDeleteSnapshot(s.id)} title="Удалить снимок">✕</button>
                           </div>
                         </div>
-                        <div className="snap-item__summary">
-                          {['green', 'yellow', 'orange', 'red'].map(c =>
-                            s.data.summary[c] > 0 && (
-                              <span key={c} className="snap-summary-badge">{COLOR_EMOJI[c]} {s.data.summary[c]}</span>
-                            )
+                        <div className="snap-item__body">
+                          <div className="snap-item__summary">
+                            {['green', 'yellow', 'orange', 'red'].map(c =>
+                              s.data.summary[c] > 0 && (
+                                <span key={c} className="snap-summary-badge">{COLOR_EMOJI[c]} {s.data.summary[c]}</span>
+                              )
+                            )}
+                            <span className="snap-summary-badge snap-summary-badge--total">Всего: {s.data.summary.total}</span>
+                          </div>
+                          {s.data.integral && (
+                            <div className="snap-integral">
+                              <span className={`snap-integral__grade snap-integral__grade--${s.data.integral.grade.toLowerCase()}`}>
+                                {s.data.integral.grade}
+                              </span>
+                              <span className={`snap-integral__verdict snap-integral__verdict--${s.data.integral.grade.toLowerCase()}`}>
+                                {s.data.integral.grade_label}
+                              </span>
+                              <span className="snap-integral__score">{s.data.integral.score}%</span>
+                              {s.data.integral.top_violations?.length > 0 && (
+                                <span className="snap-integral__violations">
+                                  нарушения: {s.data.integral.top_violations.map(v => v.criterion_id).join(', ')}
+                                </span>
+                              )}
+                            </div>
                           )}
-                          <span className="snap-summary-badge snap-summary-badge--total">Всего: {s.data.summary.total}</span>
                         </div>
-                        <button className="btn-delete" onClick={() => handleDeleteSnapshot(s.id)} title="Удалить снимок">✕</button>
                       </div>
                     ))}
                   </div>

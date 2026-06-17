@@ -10,12 +10,14 @@ document_id и document_filename хранятся как метаданные в
   GET    /api/snapshots/document/{id}/partial          — список промежуточных снимков документа
   POST   /api/snapshots/document/{id}                  — создать снимок (итоговый или промежуточный)
   POST   /api/snapshots/merge                          — объединить промежуточные → итоговый снимок
+  PATCH  /api/snapshots/{id}                           — назначить снимок в группу / сменить роль / имя
   DELETE /api/snapshots/{id}                           — удалить снимок
   GET    /api/snapshots/compare                        — сравнить два снимка / снимок с текущим
   GET    /api/snapshots/document/{id}/export           — скачать XLS
 """
 
 import io
+import re
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import StreamingResponse
@@ -43,6 +45,12 @@ class MergeSnapshotsRequest(BaseModel):
     name: str
     group_id: Optional[int] = None   # опционально: куда поместить итоговый снимок
     role: str = "current"
+
+
+class UpdateSnapshotRequest(BaseModel):
+    group_id: Optional[int] = None
+    role: Optional[str] = None
+    name: Optional[str] = None
 
 
 def _serialize_snapshot(s: Snapshot) -> dict:
@@ -81,28 +89,78 @@ def _compute_summary_from_sections(sections: list) -> dict:
 
 
 _COLOR_POINTS = {"green": 3, "yellow": 2, "orange": 1, "red": 0}
-_GRADE_THRESHOLDS = [(85, "A", "Хорошо"), (65, "B", "Есть замечания"), (40, "C", "Требует доработки"), (0, "D", "Критично")]
+_GRADE_THRESHOLDS = [
+    (85, "A", "Полностью соответствует"),
+    (65, "B", "Соответствует с замечаниями"),
+    (40, "C", "Не соответствует"),
+    (0,  "D", "Полностью не соответствует"),
+]
+
+
+def _get_criteria_labels() -> dict:
+    """Возвращает {criterion_id: name} из активного набора критериев."""
+    try:
+        from backend.database import get_active_criteria_content
+        content = get_active_criteria_content()
+        if not content:
+            return {}
+        result = {}
+        for m in re.finditer(r"###\s+(\d+[\.\d]*)\s+(.+?)(?:\n|$)", content):
+            result[m.group(1).strip()] = m.group(2).strip()
+        return result
+    except Exception:
+        return {}
 
 
 def _compute_integral_from_instructions(evaluated: list) -> Optional[dict]:
     """Вычисляет интегральную оценку из списка оценённых инструкций (для снимка)."""
     if not evaluated:
         return None
+    labels = _get_criteria_labels()
     total_points = 0
     violation_counts: dict = {}
     for instr in evaluated:
         ev = instr.evaluation
         color = ev.color or "red"
         total_points += _COLOR_POINTS.get(color, 0)
+        # criteria_results хранится как плоский словарь {"1.1": "ok"/"warning"/"error"}
         for crit_id, result in (ev.criteria_results or {}).items():
-            if isinstance(result, dict) and result.get("result") == "error":
-                label = result.get("label") or crit_id
+            if result == "error":
                 if crit_id not in violation_counts:
-                    violation_counts[crit_id] = {"label": label, "count": 0}
+                    violation_counts[crit_id] = {"label": labels.get(crit_id) or crit_id, "count": 0}
                 violation_counts[crit_id]["count"] += 1
     n = len(evaluated)
     score = round(total_points / (n * 3) * 100, 1) if n > 0 else 0.0
-    grade, grade_label = "D", "Критично"
+    grade, grade_label = "D", "Полностью не соответствует"
+    for threshold, g, gl in _GRADE_THRESHOLDS:
+        if score >= threshold:
+            grade, grade_label = g, gl
+            break
+    top_violations = sorted(
+        [{"criterion_id": k, "label": v["label"], "error_count": v["count"]} for k, v in violation_counts.items()],
+        key=lambda x: x["error_count"], reverse=True,
+    )[:3]
+    return {"score": score, "grade": grade, "grade_label": grade_label, "top_violations": top_violations, "evaluated_count": n}
+
+
+def _compute_integral_from_sections(sections: list) -> Optional[dict]:
+    """Вычисляет интегральную оценку из списка секций (data["sections"]) — для слияния снимков."""
+    if not sections:
+        return None
+    labels = _get_criteria_labels()
+    total_points = 0
+    violation_counts: dict = {}
+    for sec in sections:
+        color = sec.get("color") or "red"
+        total_points += _COLOR_POINTS.get(color, 0)
+        for crit_id, result in (sec.get("criteria_results") or {}).items():
+            if result == "error":
+                if crit_id not in violation_counts:
+                    violation_counts[crit_id] = {"label": labels.get(crit_id) or crit_id, "count": 0}
+                violation_counts[crit_id]["count"] += 1
+    n = len(sections)
+    score = round(total_points / (n * 3) * 100, 1) if n > 0 else 0.0
+    grade, grade_label = "D", "Полностью не соответствует"
     for threshold, g, gl in _GRADE_THRESHOLDS:
         if score >= threshold:
             grade, grade_label = g, gl
@@ -265,12 +323,12 @@ def create_snapshot(document_id: int, body: CreateSnapshotRequest, db: Session =
         if not group:
             raise HTTPException(status_code=404, detail="Продуктовая группа не найдена")
 
-    instructions = (
-        db.query(Instruction)
-        .filter(Instruction.document_id == document_id)
-        .order_by(Instruction.id)
-        .all()
-    )
+    query = db.query(Instruction).filter(Instruction.document_id == document_id)
+    # Для промежуточного снимка берём только текущий выбор пользователя (include_in_evaluation=1)
+    if body.is_partial:
+        query = query.filter(Instruction.include_in_evaluation == 1)
+    instructions = query.order_by(Instruction.id).all()
+
     evaluated = [i for i in instructions if i.evaluation is not None]
     if not evaluated:
         raise HTTPException(status_code=400, detail="Нет оценённых инструкций. Сначала выполните оценку.")
@@ -351,6 +409,7 @@ def merge_snapshots(body: MergeSnapshotsRequest, db: Session = Depends(get_db)):
 
     merged_sections = list(merged_by_title.values())
     merged_summary = _compute_summary_from_sections(merged_sections)
+    merged_integral = _compute_integral_from_sections(merged_sections)
 
     # Определяем document_filename из первого снимка
     document_filename = snapshots[0].document_filename
@@ -363,6 +422,10 @@ def merge_snapshots(body: MergeSnapshotsRequest, db: Session = Depends(get_db)):
             Snapshot.role == "baseline",
         ).update({"role": "current"}, synchronize_session=False)
 
+    merged_data = {"sections": merged_sections, "summary": merged_summary}
+    if merged_integral:
+        merged_data["integral"] = merged_integral
+
     merged_snapshot = Snapshot(
         group_id=body.group_id,
         document_id=document_id,
@@ -370,12 +433,115 @@ def merge_snapshots(body: MergeSnapshotsRequest, db: Session = Depends(get_db)):
         name=body.name,
         role=body.role,
         is_partial=False,
-        data={"sections": merged_sections, "summary": merged_summary},
+        data=merged_data,
     )
     db.add(merged_snapshot)
     db.commit()
     db.refresh(merged_snapshot)
     return _serialize_snapshot(merged_snapshot)
+
+
+@router.get("/{snapshot_id}/export")
+def export_snapshot_xls(snapshot_id: int, db: Session = Depends(get_db)):
+    """Скачать XLS-отчёт по конкретному снимку."""
+    try:
+        import openpyxl
+        from openpyxl.styles import PatternFill, Font, Alignment
+    except ImportError:
+        raise HTTPException(status_code=500, detail="openpyxl не установлен")
+
+    snapshot = db.query(Snapshot).filter(Snapshot.id == snapshot_id).first()
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Снимок не найден")
+
+    sections = snapshot.data.get("sections", [])
+    if not sections:
+        raise HTTPException(status_code=400, detail="Снимок не содержит оценённых разделов")
+
+    COLOR_FILLS = {
+        "green":  PatternFill("solid", fgColor="C6EFCE"),
+        "yellow": PatternFill("solid", fgColor="FFEB9C"),
+        "orange": PatternFill("solid", fgColor="FFCC99"),
+        "red":    PatternFill("solid", fgColor="FFC7CE"),
+    }
+    HEADER_FILL = PatternFill("solid", fgColor="2563EB")
+    HEADER_FONT = Font(bold=True, color="FFFFFF")
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Результаты оценки"
+
+    headers = ["Раздел", "Стр.", "Оценка", "Рекомендации"]
+    for col_idx, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_idx, value=h)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+        cell.alignment = Alignment(wrap_text=True)
+
+    for row_idx, sec in enumerate(sections, 2):
+        recommendations = sec.get("recommendations") or []
+        rec_text = "\n".join(
+            f"[{r.get('criterion', '?')}] {r.get('text', '')}"
+            + (f"\nПример: {r['example']}" if r.get('example') else "")
+            for r in recommendations
+        )
+        color = sec.get("color") or ""
+        ws.cell(row=row_idx, column=1, value=sec.get("title", ""))
+        ws.cell(row=row_idx, column=2, value=sec.get("page_number") or "")
+        color_cell = ws.cell(row=row_idx, column=3, value=COLOR_LABEL.get(color, color))
+        if color in COLOR_FILLS:
+            color_cell.fill = COLOR_FILLS[color]
+        rec_cell = ws.cell(row=row_idx, column=4, value=rec_text)
+        rec_cell.alignment = Alignment(wrap_text=True)
+
+    ws.column_dimensions["A"].width = 40
+    ws.column_dimensions["B"].width = 6
+    ws.column_dimensions["C"].width = 14
+    ws.column_dimensions["D"].width = 80
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    safe_name = (snapshot.name or snapshot.document_filename or "snapshot").replace(" ", "_")
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}_review.xlsx"'},
+    )
+
+
+@router.patch("/{snapshot_id}", status_code=200)
+def update_snapshot(snapshot_id: int, body: UpdateSnapshotRequest, db: Session = Depends(get_db)):
+    """Назначает снимок в группу, меняет роль или имя."""
+    snapshot = db.query(Snapshot).filter(Snapshot.id == snapshot_id).first()
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Снимок не найден")
+
+    if body.group_id is not None:
+        group = db.query(ProductGroup).filter(ProductGroup.id == body.group_id).first()
+        if not group:
+            raise HTTPException(status_code=404, detail="Группа не найдена")
+        # Если назначаем baseline — снимаем старый
+        role = body.role or snapshot.role
+        if role == "baseline":
+            db.query(Snapshot).filter(
+                Snapshot.group_id == body.group_id,
+                Snapshot.role == "baseline",
+            ).update({"role": "current"}, synchronize_session=False)
+        snapshot.group_id = body.group_id
+        snapshot.is_partial = False
+
+    if body.role is not None:
+        snapshot.role = body.role
+
+    if body.name is not None:
+        snapshot.name = body.name
+
+    db.commit()
+    db.refresh(snapshot)
+    return _serialize_snapshot(snapshot)
 
 
 @router.delete("/{snapshot_id}", status_code=204)
@@ -424,7 +590,6 @@ def compare_snapshots(
             .order_by(Instruction.id)
             .all()
         )
-        evaluated = [i for i in instructions if i.evaluation is not None]
         evaluated = [i for i in instructions if i.evaluation is not None]
         if not evaluated:
             raise HTTPException(status_code=400, detail="Нет оценённых инструкций для сравнения.")
