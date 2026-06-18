@@ -1,7 +1,8 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON, ForeignKey, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON, ForeignKey, Boolean, event
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
+from sqlalchemy.pool import NullPool
 from datetime import datetime
 import os
 import sys
@@ -18,7 +19,20 @@ else:
 
 DB_PATH = os.path.join(BASE_DIR, "data", "db.sqlite")
 
-engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
+engine = create_engine(
+    f"sqlite:///{DB_PATH}",
+    connect_args={"check_same_thread": False},
+    poolclass=NullPool,          # для SQLite+SSE: каждая сессия открывает/закрывает соединение сама
+)
+
+# Включаем WAL и оптимальные прагмы при каждом подключении
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragma(dbapi_conn, _):
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA busy_timeout=5000")   # ждём до 5 с при блокировке
+    cursor.close()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -351,6 +365,24 @@ def _migrate_snapshots_v2():
         conn.execute(sa_text("ALTER TABLE snapshots_new RENAME TO snapshots"))
         conn.commit()
         log.info("Миграция: snapshots — group_id nullable, добавлена колонка is_partial")
+
+
+def get_active_criteria_content() -> str:
+    """Возвращает Markdown активного набора критериев."""
+    db = SessionLocal()
+    try:
+        active = db.query(CriteriaSet).filter(CriteriaSet.is_active == True).first()
+        if active:
+            return active.content
+        # Fallback — читаем файл напрямую
+        path = _find_criteria_file()
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+        return ""
+    finally:
+        db.close()
+ble, добавлена колонка is_partial")
 
 
 def get_active_criteria_content() -> str:

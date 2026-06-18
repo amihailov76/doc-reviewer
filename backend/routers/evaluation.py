@@ -13,6 +13,10 @@ import re
 import threading
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends
+
+# Множество document_id, для которых прямо сейчас выполняется оценка
+_active_evaluations: set = set()
+_active_lock = threading.Lock()
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -86,8 +90,19 @@ def _call_llm_with_heartbeat(instr, q: queue.Queue,
 
 @router.get("/document/{document_id}")
 def evaluate_document(document_id: int, resume: bool = False, db: Session = Depends(get_db)):
+    # Защита от параллельного запуска оценки одного документа
+    with _active_lock:
+        if document_id in _active_evaluations:
+            raise HTTPException(
+                status_code=409,
+                detail="Оценка этого документа уже выполняется. Дождитесь завершения.",
+            )
+        _active_evaluations.add(document_id)
+
     doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
+        with _active_lock:
+            _active_evaluations.discard(document_id)
         raise HTTPException(status_code=404, detail="Документ не найден")
 
     instructions = (
@@ -133,112 +148,118 @@ def evaluate_document(document_id: int, resume: bool = False, db: Session = Depe
         return neighbors
 
     def stream():
-        yield _sse_event({"type": "start", "total": len(instructions)})
-        summary = {"green": 0, "yellow": 0, "orange": 0, "red": 0, "errors": 0}
-        done = 0
+        try:
+            yield _sse_event({"type": "start", "total": len(instructions)})
+            summary = {"green": 0, "yellow": 0, "orange": 0, "red": 0, "errors": 0}
+            done = 0
 
-        for instr in instructions:
-            done += 1
+            for instr in instructions:
+                done += 1
 
-            if resume:
-                existing = db.query(Evaluation).filter(
-                    Evaluation.instruction_id == instr.id
-                ).first()
-                if existing:
-                    summary[existing.color] = summary.get(existing.color, 0) + 1
+                if resume:
+                    existing = db.query(Evaluation).filter(
+                        Evaluation.instruction_id == instr.id
+                    ).first()
+                    if existing:
+                        summary[existing.color] = summary.get(existing.color, 0) + 1
+                        yield _sse_event({
+                            "type": "skip", "done": done, "total": len(instructions),
+                            "instruction_id": instr.id, "color": existing.color, "title": instr.title,
+                        })
+                        continue
+
+                neighbor_titles = _get_neighbor_titles(instr.id)
+                q = queue.Queue()
+                t = threading.Thread(
+                    target=_call_llm_with_heartbeat,
+                    args=(instr, q),
+                    kwargs={
+                        "product_context": product_context,
+                        "neighbor_titles": neighbor_titles,
+                        "glossary": doc.glossary,
+                    },
+                    daemon=True,
+                )
+                t.start()
+
+                result = None
+                error = None
+                aborted = False
+
+                while True:
+                    msg_type, msg_val = q.get()
+                    if msg_type == "heartbeat":
+                        yield _sse_heartbeat()
+                    elif msg_type == "timeout":
+                        error = EvaluationError(
+                            message=f"Модель не ответила за {INSTRUCTION_TIMEOUT} секунд",
+                            detail=f"Таймаут: {instr.title[:60]}",
+                            advice="Попробуйте переоценить раздел кнопкой ↺ или переключитесь на более быструю модель.",
+                        )
+                        aborted = False
+                        break
+                    elif msg_type == "error":
+                        error = msg_val
+                        aborted = True
+                        break
+                    elif msg_type == "result":
+                        result = msg_val
+                        break
+
+                if aborted:
+                    summary["errors"] += 1
+                    db.rollback()
                     yield _sse_event({
-                        "type": "skip", "done": done, "total": len(instructions),
-                        "instruction_id": instr.id, "color": existing.color, "title": instr.title,
+                        "type": "error", "instruction_id": instr.id, "title": instr.title,
+                        "message": error.message, "advice": error.advice,
+                    })
+                    yield _sse_event({"type": "done", "summary": summary, "aborted": True})
+                    return
+
+                if error:
+                    summary["errors"] += 1
+                    yield _sse_event({
+                        "type": "error", "instruction_id": instr.id, "title": instr.title,
+                        "message": error.message, "advice": error.advice,
                     })
                     continue
 
-            neighbor_titles = _get_neighbor_titles(instr.id)
-            q = queue.Queue()
-            t = threading.Thread(
-                target=_call_llm_with_heartbeat,
-                args=(instr, q),
-                kwargs={
-                    "product_context": product_context,
-                    "neighbor_titles": neighbor_titles,
-                    "glossary": doc.glossary,
-                },
-                daemon=True,
-            )
-            t.start()
+                try:
+                    evaluation = db.query(Evaluation).filter(Evaluation.instruction_id == instr.id).first()
+                    if evaluation:
+                        evaluation.color = result.color
+                        evaluation.criteria_results = result.criteria_results
+                        evaluation.recommendations = result.recommendations
+                        evaluation.model_used = result.model_used
+                        evaluation.evaluated_at = datetime.utcnow()
+                        # overrides не трогаем — пользователь ставил их осознанно
+                    else:
+                        evaluation = Evaluation(
+                            instruction_id=instr.id, color=result.color,
+                            criteria_results=result.criteria_results,
+                            recommendations=result.recommendations,
+                            model_used=result.model_used,
+                            overrides={},
+                        )
+                        db.add(evaluation)
+                    db.commit()
+                except Exception:
+                    db.rollback()
 
-            result = None
-            error = None
-            aborted = False
-
-            while True:
-                msg_type, msg_val = q.get()
-                if msg_type == "heartbeat":
-                    yield _sse_heartbeat()
-                elif msg_type == "timeout":
-                    error = EvaluationError(
-                        message=f"Модель не ответила за {INSTRUCTION_TIMEOUT} секунд",
-                        detail=f"Таймаут: {instr.title[:60]}",
-                        advice="Попробуйте переоценить раздел кнопкой ↺ или переключитесь на более быструю модель.",
-                    )
-                    aborted = False
-                    break
-                elif msg_type == "error":
-                    error = msg_val
-                    aborted = True
-                    break
-                elif msg_type == "result":
-                    result = msg_val
-                    break
-
-            if aborted:
-                summary["errors"] += 1
-                db.rollback()
+                summary[result.color] = summary.get(result.color, 0) + 1
                 yield _sse_event({
-                    "type": "error", "instruction_id": instr.id, "title": instr.title,
-                    "message": error.message, "advice": error.advice,
+                    "type": "progress", "done": done, "total": len(instructions),
+                    "instruction_id": instr.id, "color": result.color, "title": instr.title,
                 })
-                yield _sse_event({"type": "done", "summary": summary, "aborted": True})
-                return
 
-            if error:
-                summary["errors"] += 1
-                yield _sse_event({
-                    "type": "error", "instruction_id": instr.id, "title": instr.title,
-                    "message": error.message, "advice": error.advice,
-                })
-                continue
-
-            try:
-                evaluation = db.query(Evaluation).filter(Evaluation.instruction_id == instr.id).first()
-                if evaluation:
-                    evaluation.color = result.color
-                    evaluation.criteria_results = result.criteria_results
-                    evaluation.recommendations = result.recommendations
-                    evaluation.model_used = result.model_used
-                    evaluation.evaluated_at = datetime.utcnow()
-                    # overrides не трогаем — пользователь ставил их осознанно
-                else:
-                    evaluation = Evaluation(
-                        instruction_id=instr.id, color=result.color,
-                        criteria_results=result.criteria_results,
-                        recommendations=result.recommendations,
-                        model_used=result.model_used,
-                        overrides={},
-                    )
-                    db.add(evaluation)
-                db.commit()
-            except Exception:
-                db.rollback()
-
-            summary[result.color] = summary.get(result.color, 0) + 1
-            yield _sse_event({
-                "type": "progress", "done": done, "total": len(instructions),
-                "instruction_id": instr.id, "color": result.color, "title": instr.title,
-            })
-
-        doc.last_evaluated_at = datetime.utcnow()
-        db.commit()
-        yield _sse_event({"type": "done", "summary": summary, "aborted": False})
+            doc.last_evaluated_at = datetime.utcnow()
+            db.commit()
+            yield _sse_event({"type": "done", "summary": summary, "aborted": False})
+        finally:
+            # Снимаем флаг активной оценки в любом случае: нормальное завершение,
+            # исключение или разрыв соединения с клиентом
+            with _active_lock:
+                _active_evaluations.discard(document_id)
 
     return StreamingResponse(stream(), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -422,6 +443,53 @@ def _compute_integral(evaluated: list) -> dict:
         "evaluated_count": n,
     }
 
+
+
+@router.get("/document/{document_id}/summary")
+def get_document_summary(document_id: int, db: Session = Depends(get_db)):
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+
+    instructions = (
+        db.query(Instruction)
+        .filter(Instruction.document_id == document_id)
+        .order_by(Instruction.id)
+        .all()
+    )
+    evaluated = [i for i in instructions if i.evaluation is not None]
+
+    integral = _compute_integral(evaluated)
+    if integral is None:
+        raise HTTPException(status_code=404, detail="Нет оценённых инструкций")
+
+    integral["total_count"] = len(instructions)
+    return integral
+ * 100, 1) if n > 0 else 0.0
+
+    grade = "D"
+    grade_label = "Критично"
+    for threshold, g, gl in GRADE_THRESHOLDS:
+        if score >= threshold:
+            grade = g
+            grade_label = gl
+            break
+
+    top_violations = sorted(
+        [{"criterion_id": k, "label": v["label"], "error_count": v["count"]}
+         for k, v in violation_counts.items()],
+        key=lambda x: x["error_count"],
+        reverse=True,
+    )[:3]
+
+    return {
+        "score": score,
+        "grade": grade,
+        "grade_label": grade_label,
+        "distribution": distribution,
+        "top_violations": top_violations,
+        "evaluated_count": n,
+    }
 
 
 @router.get("/document/{document_id}/summary")
