@@ -382,21 +382,3 @@ def get_active_criteria_content() -> str:
         return ""
     finally:
         db.close()
-ble, добавлена колонка is_partial")
-
-
-def get_active_criteria_content() -> str:
-    """Возвращает Markdown активного набора критериев."""
-    db = SessionLocal()
-    try:
-        active = db.query(CriteriaSet).filter(CriteriaSet.is_active == True).first()
-        if active:
-            return active.content
-        # Fallback — читаем файл напрямую
-        path = _find_criteria_file()
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                return f.read()
-        return ""
-    finally:
-        db.close()
