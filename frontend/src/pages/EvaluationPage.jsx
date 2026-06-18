@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import DocumentTree from '../components/DocumentTree'
 import { useDocument } from '../context/DocumentContext'
 import '../styles/DocumentPage.css'
@@ -8,7 +8,7 @@ import '../styles/EvaluationPage.css'
 
 const ALLOWED_EXT = ['.pdf', '.docx', '.md', '.txt']
 const COLOR_EMOJI = { green: '🟢', yellow: '🟡', orange: '🟠', red: '🔴' }
-const COLOR_LABEL = { green: 'Хорошо', yellow: 'Замечания', orange: 'Проблемы', red: 'Критично' }
+const COLOR_LABEL = { green: 'Хорошо', yellow: 'Замечания', orange: 'Требует доработки', red: 'Критично' }
 const COLOR_RULE = {
   green:  'Нет ошибок, не более одного замечания',
   yellow: 'Есть замечания, не более одной ошибки',
@@ -545,6 +545,7 @@ export default function EvaluationPage() {
 
           {summary && !running && (
             <div className="eval-summary-bar card">
+              <p className="eval-summary__hint">Кликните на плашку, чтобы увидеть список разделов с этой оценкой</p>
               {['green', 'yellow', 'orange', 'red'].map(color => {
                 const total = (summary.green || 0) + (summary.yellow || 0) + (summary.orange || 0) + (summary.red || 0)
                 const pct = total > 0 ? Math.round((summary[color] || 0) / total * 100) : 0
@@ -592,13 +593,13 @@ export default function EvaluationPage() {
                 </div>
                 {integral.top_violations.length > 0 && (
                   <div className="integral-card__right">
-                    <span className="integral-card__violations-title">Частые нарушения:</span>
+                    <span className="integral-card__violations-title">ТОП-3 нарушений</span>
                     <ol className="integral-card__violations">
                       {integral.top_violations.map(v => (
                         <li key={v.criterion_id} className="integral-card__violation">
                           <span className="integral-card__violation-id">{v.criterion_id}</span>
                           <span className="integral-card__violation-label">{v.label}</span>
-                          <span className="integral-card__violation-count">{v.error_count}×</span>
+                          <span className="integral-card__violation-count">{v.error_count}&times;</span>
                         </li>
                       ))}
                     </ol>
@@ -610,7 +611,8 @@ export default function EvaluationPage() {
                   ⬇ Скачать XLS
                 </button>
                 <span className="integral-card__footer-hint">
-                  Хотите зафиксировать результат? Перейдите в раздел <strong>Снимки</strong>
+                  Чтобы сохранить результаты проверки в базе приложения, перейдите в раздел{' '}
+                  <Link to="/snapshots" className="footer-hint-link">Результаты</Link>
                 </span>
               </div>
             </div>
@@ -753,7 +755,7 @@ export default function EvaluationPage() {
 
 function StatusModal({ color, sections, onSelect, onClose }) {
   const COLOR_EMOJI = { green: '🟢', yellow: '🟡', orange: '🟠', red: '🔴' }
-  const COLOR_LABEL = { green: 'Хорошо', yellow: 'Замечания', orange: 'Проблемы', red: 'Критично' }
+  const COLOR_LABEL = { green: 'Хорошо', yellow: 'Замечания', orange: 'Требует доработки', red: 'Критично' }
 
   const matched = sections.filter(s => s.color === color)
 

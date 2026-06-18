@@ -423,45 +423,9 @@ def _compute_integral(evaluated: list) -> dict:
     }
 
 
+
 @router.get("/document/{document_id}/summary")
 def get_document_summary(document_id: int, db: Session = Depends(get_db)):
-    doc = db.query(Document).filter(Document.id == document_id).first()
-    if not doc:
-        raise HTTPException(status_code=404, detail="Документ не найден")
-
-    instructions = (
-        db.query(Instruction)
-        .filter(Instruction.document_id == document_id)
-        .order_by(Instruction.id)
-        .all()
-    )
-    evaluated = [i for i in instructions if i.evaluation is not None]
-
-    integral = _compute_integral(evaluated)
-    if integral is None:
-        raise HTTPException(status_code=404, detail="Нет оценённых инструкций")
-
-    integral["total_count"] = len(instructions)
-    return integral_summary(document_id: int, db: Session = Depends(get_db)):
-    doc = db.query(Document).filter(Document.id == document_id).first()
-    if not doc:
-        raise HTTPException(status_code=404, detail="Документ не найден")
-
-    instructions = (
-        db.query(Instruction)
-        .filter(Instruction.document_id == document_id)
-        .order_by(Instruction.id)
-        .all()
-    )
-    evaluated = [i for i in instructions if i.evaluation is not None]
-
-    integral = _compute_integral(evaluated)
-    if integral is None:
-        raise HTTPException(status_code=404, detail="Нет оценённых инструкций")
-
-    integral["total_count"] = len(instructions)
-    return integral
-_summary(document_id: int, db: Session = Depends(get_db)):
     doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Документ не найден")

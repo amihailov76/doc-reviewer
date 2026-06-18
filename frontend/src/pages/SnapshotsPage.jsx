@@ -283,7 +283,7 @@ export default function SnapshotsPage() {
 
   return (
     <div className="page snapshots-page">
-      <h1 className="page-title">Сравнение результатов</h1>
+      <h1 className="page-title">Результаты</h1>
       <p className="page-subtitle">
         Сравнивайте результаты проверки документа, чтобы понять, улучшился ли он после обновления.<br />
         Используйте продуктовые группы, чтобы просматривать и сравнивать результаты для документации разных продуктов.
