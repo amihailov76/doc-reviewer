@@ -1,0 +1,68 @@
+# Конфигурация синхронизации документации Doc Reviewer
+# Файл размещается рядом со скриптом sync_docs.py
+
+llm:
+  # URL API-endpoint (совместимый с OpenAI /v1/chat/completions)
+  api_url: "https://api-llm.ml.ptsecurity.ru/v1"
+  api_key: ""                  # НЕ храните ключ здесь. Передавайте через переменную окружения LLM_API_KEY.
+
+  # Модель по умолчанию; можно переопределить флагом --model
+  default_model: "openai/gpt-oss-120b"
+
+  # Доступные модели (для справки и валидации)
+  available_models:
+    - "openai/gpt-oss-120b"
+
+  # Параметры запроса
+  temperature: 0.2
+  max_tokens: 4096
+  timeout_seconds: 180
+
+repos:
+  # Путь к клонированному репозиторию doc-reviewer (для чтения git diff)
+  doc_reviewer: "../doc-reviewer"
+
+  # Путь к локальному клону mintlify-docs (куда записывать изменения)
+  mintlify_docs: "../mintlify-docs"
+
+sync:
+  # Файлы и папки в doc-reviewer, изменения которых триггерят обновление документации
+  watch_paths:
+    - "README.md"
+    - "docs/"
+    - "CHANGELOG.md"
+    - "criteria.md"
+    - "models.yml"
+
+  # Соответствие файлов doc-reviewer → страницам mintlify-docs
+  # Ключ: путь в doc-reviewer (относительно корня репо)
+  # Значение: страница(ы) в mintlify-docs (без расширения .mdx)
+  file_map:
+    "README.md":
+      - "introduction"
+      - "index"
+    "docs/installation.md":
+      - "installation"
+    "docs/quickstart.md":
+      - "quickstart"
+    "criteria.md":
+      - "concepts/criteria"
+    "docs/llm-models.md":
+      - "configuration/llm-models"
+
+  # Языки для обновления
+  languages:
+    - "en"
+    - "ru"
+
+git:
+  # Имя ветки для PR с обновлениями документации
+  branch_prefix: "docs/sync"
+
+  # Данные коммита
+  commit_author_name: "Doc Sync Bot"
+  commit_author_email: "bot@doc-reviewer"
+
+  # Создавать PR автоматически (требует gh CLI)
+  create_pr: true
+  pr_base_branch: "main"

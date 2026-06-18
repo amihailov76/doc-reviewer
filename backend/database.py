@@ -2,7 +2,6 @@ from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, J
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
-from sqlalchemy.pool import NullPool
 from datetime import datetime
 import os
 import sys
@@ -22,7 +21,6 @@ DB_PATH = os.path.join(BASE_DIR, "data", "db.sqlite")
 engine = create_engine(
     f"sqlite:///{DB_PATH}",
     connect_args={"check_same_thread": False},
-    poolclass=NullPool,          # для SQLite+SSE: каждая сессия открывает/закрывает соединение сама
 )
 
 # Включаем WAL и оптимальные прагмы при каждом подключении
