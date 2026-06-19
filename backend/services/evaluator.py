@@ -360,7 +360,7 @@ def evaluate_instruction(
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            client_kwargs = {"timeout": REQUEST_TIMEOUT_SEC}
+            client_kwargs = {"timeout": REQUEST_TIMEOUT_SEC, "verify": False}
             if proxy_url:
                 client_kwargs["proxies"] = proxy_url
 
